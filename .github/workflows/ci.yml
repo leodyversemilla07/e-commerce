@@ -37,4 +37,4 @@ jobs:
         run: bun run build
 
       - name: API tests
-        run: bun --cwd apps/api run test -- --runInBand
+        run: cd apps/api && bun run test -- --runInBand
