@@ -174,3 +174,7 @@ Expected smoke outcomes:
 | `/admin` | Admin dashboard |
 | `/admin/orders` | Order management |
 | `/admin/products` | Product management |
+
+## License
+
+MIT © Leodyver S. Semilla
