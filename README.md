@@ -177,4 +177,4 @@ Expected smoke outcomes:
 
 ## License
 
-MIT © Leodyver S. Semilla
+This project is licensed under the [MIT License](./LICENSE).
