@@ -1,4 +1,4 @@
-# E-Commerce Demo
+# E-Commerce
 
 A full-stack e-commerce application built as a monorepo — product catalog, shopping cart, checkout, order management, and admin dashboard.
 
