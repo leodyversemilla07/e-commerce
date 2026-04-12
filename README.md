@@ -1,5 +1,7 @@
 # E-Commerce
 
+![E-Commerce App Screenshot](./docs/app-screenshot.png)
+
 A full-stack e-commerce application built as a monorepo — product catalog, shopping cart, checkout, order management, and admin dashboard.
 
 ## Tech Stack
