@@ -12,6 +12,20 @@ env:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ecommerce_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ecommerce_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/ecommerce_ci
 
@@ -35,6 +49,9 @@ jobs:
 
       - name: Generate Prisma client
         run: pnpm --dir apps/api run db:generate
+
+      - name: Apply database migrations
+        run: pnpm --dir apps/api run db:migrate:deploy
 
       - name: Lint
         run: pnpm run lint
