@@ -61,3 +61,27 @@ jobs:
 
       - name: API tests
         run: pnpm --dir apps/api run test --runInBand
+
+      - name: Seed database
+        run: pnpm --dir apps/api run db:seed
+
+      - name: API runtime smoke
+        run: |
+          pnpm --dir apps/api run start:prod > api.log 2>&1 &
+          API_PID=$!
+          trap 'kill $API_PID' EXIT
+
+          for attempt in {1..30}; do
+            if curl -fsS http://127.0.0.1:4000/health; then
+              break
+            fi
+            if ! kill -0 $API_PID 2>/dev/null; then
+              cat api.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          curl -fsS http://127.0.0.1:4000/health
+          node -e 'fetch("http://127.0.0.1:4000/products").then((r) => r.json()).then((body) => { if (!Array.isArray(body.items) || body.items.length === 0) process.exit(1) })'
+          BASE_URL=http://127.0.0.1:4000 pnpm run smoke:payments
