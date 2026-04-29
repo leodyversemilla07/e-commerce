@@ -92,6 +92,10 @@ Required keys:
 - ADMIN_PASSWORD (admin panel gate password)
 - PORT (API port; default 4000)
 
+Email (password reset):
+- RESEND_API_KEY — get a free key at https://resend.com. Omit in local dev to fall back to console logging.
+- RESEND_FROM_EMAIL — must be a verified sender in your Resend account (e.g. no-reply@yourdomain.com)
+
 Payments:
 - PAYMENT_PROVIDER=mock for local/demo
 - PAYMENT_PROVIDER=stripe for real cards (requires STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET)
@@ -118,6 +122,15 @@ pnpm run dev:all
 
 - Frontend: http://localhost:3000
 - API: http://localhost:4000
+
+## Railway Deployment
+
+Each app has its own `railway.toml`. Deploy them as two separate Railway services connected to the same Postgres database add-on:
+
+1. Create a new Railway project and add a **PostgreSQL** plugin.
+2. Add two services — point one at `apps/api` and one at `apps/web`.
+3. Set the required env vars (see above) on each service.
+4. Railway will pick up the `railway.toml` in each service's root and run the correct build/start commands automatically.
 
 ## Deployment Checklist
 
