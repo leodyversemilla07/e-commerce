@@ -4,6 +4,9 @@ import { prisma } from '../prisma';
 import type { OrderStatus } from '../generated/prisma/client';
 import type { OrdersRequestIdentity } from './orders.types';
 
+const DEFAULT_PAGE_LIMIT = 20;
+const MAX_PAGE_LIMIT = 100;
+
 @Injectable()
 export class OrdersService {
   private whereForIdentity(identity: OrdersRequestIdentity) {
@@ -15,7 +18,13 @@ export class OrdersService {
     };
   }
 
-  async listOrders(identity: OrdersRequestIdentity) {
+  async listOrders(
+    identity: OrdersRequestIdentity,
+    options: { limit?: number; cursor?: string } = {},
+  ) {
+    const limit = Math.min(options.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
+    const cursor = options.cursor;
+
     const orders = await prisma.order.findMany({
       where: this.whereForIdentity(identity),
       orderBy: { createdAt: 'desc' },
@@ -34,11 +43,15 @@ export class OrdersService {
           },
         },
       },
-      take: 50,
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
 
+    const hasMore = orders.length > limit;
+    const page = hasMore ? orders.slice(0, limit) : orders;
+
     return {
-      items: orders.map((order) => ({
+      items: page.map((order) => ({
         id: order.id,
         status: order.status,
         subtotalInCents: order.subtotalInCents,
@@ -50,7 +63,8 @@ export class OrdersService {
         customerEmail: order.customerEmail,
         createdAt: order.createdAt,
       })),
-      count: orders.length,
+      count: page.length,
+      nextCursor: hasMore ? page[page.length - 1].id : null,
     };
   }
 
@@ -124,7 +138,10 @@ export class OrdersService {
     });
   }
 
-  async listAllOrders() {
+  async listAllOrders(options: { limit?: number; cursor?: string } = {}) {
+    const limit = Math.min(options.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
+    const cursor = options.cursor;
+
     const orders = await prisma.order.findMany({
       orderBy: { createdAt: 'desc' },
       include: {
@@ -136,11 +153,15 @@ export class OrdersService {
           },
         },
       },
-      take: 100,
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
 
+    const hasMore = orders.length > limit;
+    const page = hasMore ? orders.slice(0, limit) : orders;
+
     return {
-      items: orders.map((order) => ({
+      items: page.map((order) => ({
         id: order.id,
         status: order.status,
         customerName: order.customerName,
@@ -150,7 +171,8 @@ export class OrdersService {
         createdAt: order.createdAt,
         updatedAt: order.updatedAt,
       })),
-      count: orders.length,
+      count: page.length,
+      nextCursor: hasMore ? page[page.length - 1].id : null,
     };
   }
 }
