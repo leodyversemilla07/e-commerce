@@ -33,7 +33,7 @@ A full-stack e-commerce application built as a monorepo — product catalog, sho
 ### Tooling
 | Tool | Version |
 |---|---|
-| Bun | 1.3.12 |
+| pnpm | 10.33.2 |
 | Turborepo | 2.8.17 |
 | Biome | 1.9.4 |
 
@@ -100,18 +100,20 @@ Payments:
 
 ```bash
 # Install dependencies
-bun install
+pnpm install
 
 # Set up environment
 cp .env.example .env
+cp .env.example apps/api/.env
+cp .env.example apps/web/.env.local
 
 # Set up database
-bun --cwd apps/api run db:migrate
-bun --cwd apps/api run db:generate
-bun --cwd apps/api run db:seed
+pnpm --dir apps/api run db:migrate
+pnpm --dir apps/api run db:generate
+pnpm --dir apps/api run db:seed
 
 # Run both apps
-bun run dev:all
+pnpm run dev:all
 ```
 
 - Frontend: http://localhost:3000
@@ -127,30 +129,30 @@ bun run dev:all
 
 2) Database
 ```bash
-bun --cwd apps/api run db:generate
-bun --cwd apps/api run db:migrate
-bun --cwd apps/api run db:seed   # run only when appropriate for your environment
+pnpm --dir apps/api run db:generate
+pnpm --dir apps/api run db:migrate
+pnpm --dir apps/api run db:seed   # run only when appropriate for your environment
 ```
 
 3) Quality gates
 ```bash
-bun run lint
-bun run typecheck
-bun run build
-bun --cwd apps/api test -- --runInBand
+pnpm run lint
+pnpm run typecheck
+pnpm run build
+pnpm --dir apps/api run test --runInBand
 ```
 
 4) Run apps
-- Web: `bun --cwd apps/web start`
-- API: `bun --cwd apps/api start:prod`
+- Web: `pnpm --dir apps/web start`
+- API: `pnpm --dir apps/api start:prod`
 
 5) Post-deploy smoke tests
 ```bash
 # full smoke checks (web + api)
-WEB_BASE_URL=https://your-web-domain API_BASE_URL=https://your-api-domain bun run smoke:postdeploy
+WEB_BASE_URL=https://your-web-domain API_BASE_URL=https://your-api-domain pnpm run smoke:postdeploy
 
 # payment endpoints smoke checks (against API)
-BASE_URL=https://your-api-domain bun run smoke:payments
+BASE_URL=https://your-api-domain pnpm run smoke:payments
 ```
 
 Expected smoke outcomes:

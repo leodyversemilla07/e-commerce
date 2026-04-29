@@ -1,5 +1,10 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
   "files": {
     "ignore": [
       "**/node_modules/**",
@@ -35,6 +40,10 @@
     }
   },
   "json": {
+    "parser": {
+      "allowComments": true,
+      "allowTrailingCommas": true
+    },
     "formatter": {
       "enabled": true
     }

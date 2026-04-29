@@ -4,14 +4,14 @@
   "private": true,
   "scripts": {
     "build": "turbo build",
-    "dev": "bun run dev:all",
+    "dev": "pnpm run dev:all",
     "lint": "biome lint apps packages/eslint-config package.json turbo.json biome.json",
     "format": "biome format --write .",
     "check": "biome check .",
     "typecheck": "turbo typecheck",
-    "dev:web": "bun --cwd apps/web dev",
-    "dev:api": "bun --cwd apps/api dev",
-    "dev:all": "concurrently -n web,api -c cyan,magenta \"bun run dev:web\" \"bun run dev:api\"",
+    "dev:web": "pnpm --dir apps/web dev",
+    "dev:api": "pnpm --dir apps/api dev",
+    "dev:all": "concurrently -n web,api -c cyan,magenta \"pnpm run dev:web\" \"pnpm run dev:api\"",
     "smoke:postdeploy": "node scripts/post-deploy-smoke.mjs",
     "smoke:payments": "node scripts/e2e-payment-check.js"
   },
@@ -23,7 +23,7 @@
     "turbo": "^2.8.17",
     "typescript": "5.9.3"
   },
-  "packageManager": "bun@1.3.12",
+  "packageManager": "pnpm@10.33.2",
   "engines": {
     "node": ">=20"
   },
@@ -31,6 +31,19 @@
     "apps/*",
     "packages/*"
   ],
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@biomejs/biome",
+      "@nestjs/core",
+      "@prisma/engines",
+      "better-sqlite3",
+      "esbuild",
+      "msw",
+      "prisma",
+      "sharp",
+      "unrs-resolver"
+    ]
+  },
   "dependencies": {
     "lucide-react": "^1.8.0"
   }
