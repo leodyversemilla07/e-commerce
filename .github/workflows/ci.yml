@@ -93,12 +93,14 @@ jobs:
         shell: bash
 
       - name: Web smoke tests
+        env:
+          WEB_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:4000
+          BASE_URL: http://127.0.0.1:4000
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
         run: |
-          WEB_BASE_URL=http://127.0.0.1:3000
-          API_BASE_URL=http://127.0.0.1:4000
-          ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}
           pnpm run smoke:postdeploy
-          BASE_URL=http://127.0.0.1:4000 pnpm run smoke:payments
+          pnpm run smoke:payments
         shell: bash
 
       - name: Stop services
