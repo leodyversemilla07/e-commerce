@@ -1,4 +1,4 @@
-import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param, Query } from '@nestjs/common';
 import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
 
 import { ProductsService } from './products.service';
@@ -9,12 +9,19 @@ export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @Get()
-  async listProducts() {
-    const products = await this.productsService.listProducts();
+  async listProducts(
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+  ) {
+    const result = await this.productsService.listProducts({
+      limit: limit ? Number(limit) : undefined,
+      cursor,
+    });
 
     return {
-      items: products,
-      count: products.length,
+      items: result.items,
+      count: result.items.length,
+      nextCursor: result.nextCursor,
     };
   }
 

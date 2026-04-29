@@ -1,4 +1,4 @@
-import { Body, Controller, Get, NotFoundException, Param, Patch } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Patch, Query } from '@nestjs/common';
 import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
 import type { OrderStatus } from '../generated/prisma/client';
 import { prisma } from '../prisma';
@@ -10,8 +10,14 @@ export class AdminOrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Get()
-  async listAllOrders() {
-    return this.ordersService.listAllOrders();
+  async listAllOrders(
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+  ) {
+    return this.ordersService.listAllOrders({
+      limit: limit ? Number(limit) : undefined,
+      cursor,
+    });
   }
 
   @Get(':id')
