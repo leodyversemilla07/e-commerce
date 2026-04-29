@@ -65,23 +65,45 @@ jobs:
       - name: Seed database
         run: pnpm --dir apps/api run db:seed
 
-      - name: API runtime smoke
-        run: |
-          pnpm --dir apps/api run start:prod > api.log 2>&1 &
-          API_PID=$!
-          trap 'kill $API_PID' EXIT
+      - name: Start API
+        run: pnpm --dir apps/api run start:prod > api.log 2>&1 &
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/ecommerce_ci
+        shell: bash
+        timeout-minutes: 3
 
-          for attempt in {1..30}; do
-            if curl -fsS http://127.0.0.1:4000/health; then
-              break
-            fi
-            if ! kill -0 $API_PID 2>/dev/null; then
-              cat api.log
-              exit 1
-            fi
+      - name: Start Web
+        run: pnpm --dir apps/web run start:prod > web.log 2>&1 &
+        env:
+          NEXT_PUBLIC_AUTH_BASE_URL: http://127.0.0.1:4000
+        shell: bash
+        timeout-minutes: 3
+
+      - name: Wait for services
+        run: |
+          for attempt in {1..60}; do
+            API_OK=false; WEB_OK=false
+            curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1 && API_OK=true
+            curl -fsS http://127.0.0.1:3000 >/dev/null 2>&1 && WEB_OK=true
+            if $API_OK && $WEB_OK; then break; fi
             sleep 1
           done
-
           curl -fsS http://127.0.0.1:4000/health
-          node -e 'fetch("http://127.0.0.1:4000/products").then((r) => r.json()).then((body) => { if (!Array.isArray(body.items) || body.items.length === 0) process.exit(1) })'
+          curl -fsS http://127.0.0.1:3000 >/dev/null
+        shell: bash
+
+      - name: Web smoke tests
+        run: |
+          WEB_BASE_URL=http://127.0.0.1:3000
+          API_BASE_URL=http://127.0.0.1:4000
+          ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}
+          pnpm run smoke:postdeploy
           BASE_URL=http://127.0.0.1:4000 pnpm run smoke:payments
+        shell: bash
+
+      - name: Stop services
+        if: always()
+        run: |
+          pkill -f "next start" || true
+          pkill -f "node dist/src/main" || true
+          pkill -f "node.*main" || true
