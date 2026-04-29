@@ -7,7 +7,7 @@
     "dev": "pnpm run dev:all",
     "lint": "biome lint apps packages/eslint-config package.json turbo.json biome.json",
     "format": "biome format --write .",
-    "check": "biome check .",
+    "check": "pnpm run lint && pnpm run typecheck",
     "typecheck": "turbo typecheck",
     "dev:web": "pnpm --dir apps/web dev",
     "dev:api": "pnpm --dir apps/api dev",
