@@ -155,6 +155,12 @@ Each app has its own `railway.toml`. Deploy them as two separate Railway service
 - Use secure values for BETTER_AUTH_SECRET and ADMIN_PASSWORD
 - Set BETTER_AUTH_TRUSTED_ORIGINS to your deployed web origin(s)
 - Ensure DATABASE_URL points to production Postgres
+- Validate env locally or in deployment logs:
+  ```bash
+  pnpm run validate:env
+  pnpm run validate:env:api
+  pnpm run validate:env:web
+  ```
 
 2) Database
 ```bash

@@ -13,7 +13,10 @@
     "dev:api": "pnpm --dir apps/api dev",
     "dev:all": "concurrently -n web,api -c cyan,magenta \"pnpm run dev:web\" \"pnpm run dev:api\"",
     "smoke:postdeploy": "node scripts/post-deploy-smoke.mjs",
-    "smoke:payments": "node scripts/e2e-payment-check.js"
+    "smoke:payments": "node scripts/e2e-payment-check.js",
+    "validate:env": "node scripts/validate-env.mjs --service=all",
+    "validate:env:api": "node scripts/validate-env.mjs --service=api",
+    "validate:env:web": "node scripts/validate-env.mjs --service=web"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

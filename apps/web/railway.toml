@@ -3,7 +3,7 @@ builder = "NIXPACKS"
 buildCommand = "if [ -f ../../pnpm-lock.yaml ]; then cd ../..; fi; corepack enable && corepack prepare pnpm@10.33.2 --activate && pnpm install --frozen-lockfile && pnpm --dir apps/web run build"
 
 [deploy]
-startCommand = "if [ -f ../../pnpm-lock.yaml ]; then cd ../..; fi; corepack enable && corepack prepare pnpm@10.33.2 --activate && pnpm --dir apps/web run start:prod"
+startCommand = "if [ -f ../../pnpm-lock.yaml ]; then cd ../..; fi; corepack enable && corepack prepare pnpm@10.33.2 --activate && pnpm run validate:env:web && pnpm --dir apps/web run start:prod"
 healthcheckPath = "/"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
