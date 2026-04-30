@@ -129,8 +129,24 @@ Each app has its own `railway.toml`. Deploy them as two separate Railway service
 
 1. Create a new Railway project and add a **PostgreSQL** plugin.
 2. Add two services — point one at `apps/api` and one at `apps/web`.
-3. Set the required env vars (see above) on each service.
+3. Set the required env vars on each service (see the matrix below).
 4. Railway will pick up the `railway.toml` in each service's root and run the correct build/start commands automatically.
+5. The API service runs `prisma migrate deploy` before each deployment.
+
+| Variable | API service | Web service | Notes |
+|---|---:|---:|---|
+| `DATABASE_URL` | yes | no | Railway Postgres connection string |
+| `PORT` | optional | optional | Railway provides this automatically |
+| `BETTER_AUTH_URL` | yes | yes | Public API origin, e.g. `https://api.example.com` |
+| `BETTER_AUTH_SECRET` | yes | yes | Same secure random value on both services |
+| `BETTER_AUTH_TRUSTED_ORIGINS` | yes | no | Web origin(s), comma-separated |
+| `NEXT_PUBLIC_AUTH_BASE_URL` | no | yes | Public API origin used by the browser |
+| `ADMIN_PASSWORD` | no | yes | Admin route password gate |
+| `RESEND_API_KEY` | yes | no | Required for production password reset / order emails |
+| `RESEND_FROM_EMAIL` | yes | no | Verified Resend sender |
+| `PAYMENT_PROVIDER` | yes | no | `mock` or `stripe` |
+| `STRIPE_SECRET_KEY` | yes, if Stripe | no | Required when `PAYMENT_PROVIDER=stripe` |
+| `STRIPE_WEBHOOK_SECRET` | yes, if Stripe | no | Required for Stripe webhooks |
 
 ## Deployment Checklist
 
@@ -143,7 +159,7 @@ Each app has its own `railway.toml`. Deploy them as two separate Railway service
 2) Database
 ```bash
 pnpm --dir apps/api run db:generate
-pnpm --dir apps/api run db:migrate
+pnpm --dir apps/api run db:migrate:deploy
 pnpm --dir apps/api run db:seed   # run only when appropriate for your environment
 ```
 

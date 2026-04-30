@@ -1,9 +1,10 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "pnpm install --frozen-lockfile && pnpm --dir apps/api run db:generate && pnpm --dir apps/api run build"
+buildCommand = "if [ -f ../../pnpm-lock.yaml ]; then cd ../..; fi; corepack enable && corepack prepare pnpm@10.33.2 --activate && pnpm install --frozen-lockfile && pnpm --dir apps/api run build"
 
 [deploy]
-startCommand = "pnpm --dir apps/api run start:prod"
+preDeployCommand = "if [ -f ../../pnpm-lock.yaml ]; then cd ../..; fi; corepack enable && corepack prepare pnpm@10.33.2 --activate && pnpm --dir apps/api run db:migrate:deploy"
+startCommand = "if [ -f ../../pnpm-lock.yaml ]; then cd ../..; fi; corepack enable && corepack prepare pnpm@10.33.2 --activate && pnpm --dir apps/api run start:prod"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
