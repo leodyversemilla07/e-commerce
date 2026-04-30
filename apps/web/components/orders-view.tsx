@@ -6,6 +6,30 @@ import { useEffect, useState } from "react"
 import { formatOrderStatus, formatOrderTotal, getOrderStatusVariant, getOrders, type OrdersListItem } from "@/lib/orders"
 import { Badge } from "@workspace/ui/components/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
+import { Skeleton } from "@workspace/ui/components/skeleton"
+
+function OrdersViewSkeleton() {
+  return (
+    <div className="flex flex-col gap-3">
+      {['order-row-1', 'order-row-2', 'order-row-3'].map((id) => (
+        <Card key={id}>
+          <CardContent className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-2">
+              <Skeleton className="h-3 w-16" />
+              <Skeleton className="h-5 w-56" />
+              <Skeleton className="h-4 w-40" />
+            </div>
+            <div className="flex flex-col items-start gap-2 sm:items-end">
+              <Skeleton className="h-6 w-24 rounded-full" />
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-7 w-28" />
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  )
+}
 
 export function OrdersView() {
   const [orders, setOrders] = useState<OrdersListItem[]>([])
@@ -28,7 +52,7 @@ export function OrdersView() {
   }, [])
 
   if (loading) {
-    return <p className="text-sm text-muted-foreground">Loading orders...</p>
+    return <OrdersViewSkeleton />
   }
 
   if (orders.length === 0) {

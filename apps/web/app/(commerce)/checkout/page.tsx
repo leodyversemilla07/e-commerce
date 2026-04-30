@@ -14,7 +14,7 @@ export default function CheckoutPage() {
       </div>
 
       {loading ? (
-        <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">Loading checkout...</div>
+        <p className="text-sm text-muted-foreground">Loading checkout...</p>
       ) : !cart || cart.itemCount === 0 ? (
         <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">
           Your cart is empty. Add items before checkout.

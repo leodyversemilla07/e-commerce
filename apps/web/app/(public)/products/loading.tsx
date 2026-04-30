@@ -1,27 +1,38 @@
-import { ProductFilters } from "@/components/product-filters"
-import { getProducts } from "@/lib/catalog"
+import { Card, CardContent, CardHeader } from "@workspace/ui/components/card"
+import { Skeleton } from "@workspace/ui/components/skeleton"
 
-export default async function ProductsLoading() {
+function ProductCardSkeleton({ id }: { id: string }) {
+  return (
+    <Card key={id}>
+      <Skeleton className="aspect-[4/3] w-full rounded-b-none rounded-t-4xl" />
+      <CardHeader>
+        <Skeleton className="h-5 w-3/4" />
+        <Skeleton className="h-4 w-1/2" />
+      </CardHeader>
+      <CardContent className="flex items-center justify-between gap-4">
+        <Skeleton className="h-6 w-24" />
+        <Skeleton className="h-9 w-24 rounded-2xl" />
+      </CardContent>
+    </Card>
+  )
+}
+
+export default function ProductsLoading() {
   return (
     <main className="min-h-svh bg-background px-6 py-8 text-foreground md:px-10">
-      <section className="mx-auto max-w-7xl space-y-8">
-        <div className="h-12 w-full animate-pulse rounded-2xl bg-muted" />
-        <div className="space-y-2">
-          <div className="h-9 w-36 animate-pulse rounded-md bg-muted" />
-          <div className="h-5 w-80 animate-pulse rounded-md bg-muted" />
+      <section className="mx-auto flex max-w-7xl flex-col gap-8">
+        <Skeleton className="h-12 w-full rounded-2xl" />
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-10 w-40" />
+          <Skeleton className="h-5 w-full max-w-96" />
         </div>
-        <div className="h-10 w-full animate-pulse rounded-md bg-muted" />
+        <Skeleton className="h-11 w-full rounded-2xl" />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {["a", "b", "c", "d", "e", "f"].map((key) => (
-            <div key={key} className="animate-pulse rounded-2xl border bg-card">
-              <div className="aspect-[4/3] rounded-b-none bg-muted" />
-              <div className="space-y-2 p-4">
-                <div className="h-5 w-3/4 rounded bg-muted" />
-                <div className="h-4 w-1/2 rounded bg-muted" />
-                <div className="h-4 w-1/3 rounded bg-muted" />
-              </div>
-            </div>
-          ))}
+          {['product-1', 'product-2', 'product-3', 'product-4', 'product-5', 'product-6'].map(
+            (id) => (
+              <ProductCardSkeleton key={id} id={id} />
+            )
+          )}
         </div>
       </section>
     </main>

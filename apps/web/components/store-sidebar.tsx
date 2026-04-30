@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { LayoutDashboard, LogIn, LogOut, Package, Receipt, ShoppingCart, User } from "lucide-react"
+import { LayoutDashboard, LogIn, LogOut, Receipt, ShoppingCart, User } from "lucide-react"
 
 import { authClient } from "@/lib/auth-client"
 import {
@@ -18,6 +18,7 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@workspace/ui/components/sidebar"
+import { Skeleton } from "@workspace/ui/components/skeleton"
 
 const navItems = [
   { title: "Dashboard", href: "/account/dashboard", icon: LayoutDashboard },
@@ -79,29 +80,6 @@ function StoreSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-        <SidebarGroup>
-          <SidebarGroupLabel>Store</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild tooltip="Cart" isActive={pathname === "/cart" || pathname.startsWith("/checkout")}>
-                  <Link href="/cart">
-                    <ShoppingCart className="size-4" />
-                    <span>Cart</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild tooltip="Browse Products">
-                  <Link href="/products">
-                    <Package className="size-4" />
-                    <span>Browse Products</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
       </SidebarContent>
 
       <SidebarFooter>
@@ -109,7 +87,7 @@ function StoreSidebar() {
           <SidebarMenuItem>
             {isPending ? (
               <SidebarMenuButton disabled>
-                <span className="text-xs text-muted-foreground">Loading...</span>
+                <Skeleton className="h-4 w-24" />
               </SidebarMenuButton>
             ) : session?.user ? (
               <>

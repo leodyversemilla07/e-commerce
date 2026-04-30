@@ -7,9 +7,53 @@ import { formatPHP } from "@/lib/catalog"
 import { getOrderById, type OrderDetail } from "@/lib/orders"
 import { OrderStatusTimeline } from "@/components/order-status-timeline"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
+import { Skeleton } from "@workspace/ui/components/skeleton"
 
 type OrderDetailViewProps = {
   orderId: string
+}
+
+function OrderDetailSkeleton() {
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-64" />
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
+          <Skeleton className="h-16 w-full rounded-2xl" />
+          <div className="flex flex-col gap-2">
+            <Skeleton className="h-4 w-48" />
+            <Skeleton className="h-4 w-56" />
+            <Skeleton className="h-4 w-72" />
+          </div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-24" />
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {['item-1', 'item-2', 'item-3'].map((id) => (
+            <div key={id} className="flex items-center justify-between gap-4 border-b pb-3 last:border-b-0 last:pb-0">
+              <div className="flex flex-col gap-2">
+                <Skeleton className="h-5 w-44" />
+                <Skeleton className="h-4 w-32" />
+              </div>
+              <Skeleton className="h-5 w-24" />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardContent className="flex flex-col gap-3">
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-7 w-full" />
+        </CardContent>
+      </Card>
+    </div>
+  )
 }
 
 export function OrderDetailView({ orderId }: OrderDetailViewProps) {
@@ -37,7 +81,7 @@ export function OrderDetailView({ orderId }: OrderDetailViewProps) {
   }, [orderId])
 
   if (loading) {
-    return <p className="text-sm text-muted-foreground">Loading order...</p>
+    return <OrderDetailSkeleton />
   }
 
   if (error || !order) {
