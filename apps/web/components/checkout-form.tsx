@@ -1,13 +1,13 @@
 "use client"
 
 import Link from "next/link"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 
 import { formatPHP } from "@/lib/catalog"
 import { createPendingOrder, type CheckoutPayload, type OrderResponse } from "@/lib/checkout"
-import { confirmPaymentIntent, createPaymentIntent } from "@/lib/payments"
+import { confirmPaymentIntent, createPaymentIntent, getPaymentCapabilities } from "@/lib/payments"
 import { useCheckoutStore } from "@/providers/checkout-store-provider"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
@@ -55,6 +55,17 @@ export function CheckoutForm({ subtotalInCents, itemCount }: CheckoutFormProps) 
   const setDeliveryOption = useCheckoutStore((state) => state.setDeliveryOption)
   const resetCheckoutState = useCheckoutStore((state) => state.reset)
   const [pending, setPending] = useState(false)
+  const [cardAvailable, setCardAvailable] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    getPaymentCapabilities().then(({ cardAvailable }) => {
+      if (active) setCardAvailable(cardAvailable)
+    }).catch(() => {
+      if (active) setCardAvailable(false)
+    })
+    return () => { active = false }
+  }, [])
   const [order, setOrder] = useState<OrderResponse | null>(null)
 
   const canSubmit = useMemo(() => {
@@ -93,10 +104,12 @@ export function CheckoutForm({ subtotalInCents, itemCount }: CheckoutFormProps) 
       let paymentIntentId: string | undefined = undefined
 
       if (paymentMethod === "card") {
+        if (!cardAvailable) throw new Error('Card payment is not available; select cash on delivery')
         const paymentIntent = await createPaymentIntent({
           amountInCents: totalInCents,
           currency: "PHP",
           method: "card",
+          shippingMethod,
         })
 
         const confirmedIntent = await confirmPaymentIntent(paymentIntent.id)
@@ -119,7 +132,7 @@ export function CheckoutForm({ subtotalInCents, itemCount }: CheckoutFormProps) 
       setOrder(created)
       resetCheckoutState()
       await queryClient.invalidateQueries({ queryKey: ["cart"] })
-      toast.success("Order created. Status: pending")
+      toast.success(`Order created. Status: ${created.status.toLowerCase()}`)
     } catch (error) {
       toast.error(getErrorMessage(error, "Failed to create order"))
     } finally {
@@ -131,7 +144,7 @@ export function CheckoutForm({ subtotalInCents, itemCount }: CheckoutFormProps) 
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Order placed (pending)</CardTitle>
+          <CardTitle>Order placed ({order.status.toLowerCase()})</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           <p>Order ID: {order.id}</p>
@@ -304,11 +317,12 @@ export function CheckoutForm({ subtotalInCents, itemCount }: CheckoutFormProps) 
             <Button
               type="button"
               variant={paymentMethod === "card" ? "default" : "outline"}
+              disabled={!cardAvailable}
               onClick={() => setPaymentMethod("card")}
               className="justify-between text-left"
             >
               <span className="text-sm">Card payment</span>
-              <span className="text-xs text-muted-foreground">Mock intent (ready)</span>
+              <span className="text-xs text-muted-foreground">{cardAvailable ? 'Demo card only' : 'Unavailable'}</span>
             </Button>
           </CardContent>
         </Card>

@@ -1,10 +1,12 @@
-import { Body, Controller, Get, NotFoundException, Param, Patch, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Patch, Query, UseGuards } from '@nestjs/common';
 import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
-import type { OrderStatus } from '../generated/prisma/client';
+import type { OrderStatus } from './orders.types';
 import { prisma } from '../prisma';
+import { AdminApiGuard } from '../admin/admin-api.guard';
 import { OrdersService } from './orders.service';
 
 @AllowAnonymous()
+@UseGuards(AdminApiGuard)
 @Controller('admin/orders')
 export class AdminOrdersController {
   constructor(private readonly ordersService: OrdersService) {}
@@ -55,6 +57,7 @@ export class AdminOrdersController {
       shippingFeeInCents: order.shippingFeeInCents,
       taxInCents: order.taxInCents,
       totalInCents: order.totalInCents,
+      hasCardPayment: Boolean(order.paymentIntentId),
       createdAt: order.createdAt.toISOString(),
       updatedAt: order.updatedAt.toISOString(),
       itemCount: order.items.length,
@@ -74,6 +77,9 @@ export class AdminOrdersController {
     @Param('id') id: string,
     @Body('status') status: OrderStatus,
   ) {
+    if (!['PENDING', 'CONFIRMED', 'SHIPPED', 'DELIVERED', 'CANCELLED'].includes(status)) {
+      throw new BadRequestException('Invalid order status');
+    }
     const order = await this.ordersService.updateOrderStatus(id, status);
     return { id: order.id, status: order.status };
   }

@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { adminServerFetch } from '@/lib/admin-api'
 
 import { formatPHP } from "@/lib/catalog"
 import { AdminSearch } from "@/components/admin-search"
@@ -6,12 +7,6 @@ import { AdminProductActions } from "@/components/admin-product-actions"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
-
-function resolveApiBaseURL() {
-  if (process.env.NEXT_PUBLIC_AUTH_BASE_URL) return process.env.NEXT_PUBLIC_AUTH_BASE_URL
-  if (process.env.BETTER_AUTH_URL) return process.env.BETTER_AUTH_URL
-  return "http://localhost:4000"
-}
 
 type ProductItem = {
   id: string
@@ -27,7 +22,7 @@ type ProductItem = {
 
 async function getProducts(): Promise<ProductItem[]> {
   try {
-    const res = await fetch(`${resolveApiBaseURL()}/admin/products`, { cache: "no-store" })
+    const res = await adminServerFetch('products')
     if (!res.ok) return []
     const data = (await res.json()) as { items: ProductItem[] }
     return data.items

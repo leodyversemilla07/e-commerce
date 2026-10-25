@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { adminServerFetch } from '@/lib/admin-api'
 import { ShoppingCart } from "lucide-react"
 
 import { formatPHP } from "@/lib/catalog"
@@ -6,12 +7,6 @@ import { formatOrderStatus, getOrderStatusVariant } from "@/lib/orders"
 import { AdminCharts } from "@/components/admin/admin-charts"
 import { Badge } from "@workspace/ui/components/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
-
-function resolveApiBaseURL() {
-  if (process.env.NEXT_PUBLIC_AUTH_BASE_URL) return process.env.NEXT_PUBLIC_AUTH_BASE_URL
-  if (process.env.BETTER_AUTH_URL) return process.env.BETTER_AUTH_URL
-  return "http://localhost:4000"
-}
 
 type OrderSummary = {
   id: string
@@ -23,7 +18,7 @@ type OrderSummary = {
 
 async function getRecentOrders(): Promise<OrderSummary[]> {
   try {
-    const res = await fetch(`${resolveApiBaseURL()}/admin/orders`, { cache: "no-store" })
+    const res = await adminServerFetch('orders')
     if (!res.ok) return []
     const data = (await res.json()) as { items: OrderSummary[] }
     return (data.items ?? []).slice(0, 5)

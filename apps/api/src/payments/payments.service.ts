@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto"
-import { BadRequestException, Injectable, InternalServerErrorException } from "@nestjs/common"
+import { BadRequestException, Injectable, InternalServerErrorException, ServiceUnavailableException } from "@nestjs/common"
 
 import { prisma } from "../prisma"
+import { CartService } from '../cart/cart.service'
+import type { CartRequestIdentity } from '../cart/cart.types'
 import type {
   ConfirmPaymentIntentPayload,
   CreatePaymentIntentPayload,
@@ -18,6 +20,7 @@ type StripePaymentIntent = {
   currency: string
   client_secret: string | null
   created: number
+  metadata?: Record<string, string>
 }
 
 type StripeWebhookEvent = {
@@ -32,7 +35,7 @@ type StripeWebhookEvent = {
 
 type WebhookClaimResult = {
   alreadyProcessed: boolean
-  claimed: boolean
+  claimedAt: Date | null
 }
 
 type StripeSDK = {
@@ -43,6 +46,7 @@ type StripeSDK = {
       automatic_payment_methods: { enabled: boolean }
       metadata: Record<string, string>
     }) => Promise<StripePaymentIntent>
+    retrieve: (paymentIntentId: string) => Promise<StripePaymentIntent>
     confirm: (
       paymentIntentId: string,
       payload?: {
@@ -60,6 +64,7 @@ type PaymentProvider = {
     amountInCents: number
     currency: "PHP"
     method: "card"
+    cartId?: string
   }): Promise<PaymentIntentResponse> | PaymentIntentResponse
   confirmIntent(
     paymentIntentId: string,
@@ -69,6 +74,7 @@ type PaymentProvider = {
     signature: string,
     rawBody: Buffer
   ): Promise<PaymentWebhookResult> | PaymentWebhookResult
+  getIntent(paymentIntentId: string): Promise<PaymentIntentResponse> | PaymentIntentResponse
 }
 
 class MockPaymentProvider implements PaymentProvider {
@@ -78,6 +84,7 @@ class MockPaymentProvider implements PaymentProvider {
     amountInCents: number
     currency: "PHP"
     method: "card"
+    cartId?: string
   }): PaymentIntentResponse {
     const intentId = `pi_mock_${randomUUID().replace(/-/g, "")}`
 
@@ -90,6 +97,7 @@ class MockPaymentProvider implements PaymentProvider {
       method: payload.method,
       clientSecret: `mock_secret_${intentId}`,
       createdAt: new Date().toISOString(),
+      cartId: payload.cartId,
     }
 
     this.intents.set(intentId, intent)
@@ -116,6 +124,12 @@ class MockPaymentProvider implements PaymentProvider {
     return confirmed
   }
 
+  getIntent(paymentIntentId: string): PaymentIntentResponse {
+    const intent = this.intents.get(paymentIntentId)
+    if (!intent) throw new BadRequestException('Payment intent not found')
+    return intent
+  }
+
   handleWebhook(_signature: string, _rawBody: Buffer): PaymentWebhookResult {
     return {
       received: true,
@@ -125,53 +139,33 @@ class MockPaymentProvider implements PaymentProvider {
   }
 }
 
-class StripePaymentProvider implements PaymentProvider {
+export class StripePaymentProvider implements PaymentProvider {
   private readonly secretKey: string
   private readonly webhookSecret: string
 
   private async claimWebhookEvent(event: StripeWebhookEvent): Promise<WebhookClaimResult> {
+    const claimedAt = new Date()
+    const staleBefore = new Date(claimedAt.getTime() - 5 * 60 * 1000)
     const existing = await prisma.paymentWebhookEvent.findUnique({
       where: { eventId: event.id },
-      select: { id: true, processedAt: true, processing: true },
+      select: { processedAt: true },
     })
-
-    if (existing?.processedAt) {
-      return { alreadyProcessed: true, claimed: false }
-    }
+    if (existing?.processedAt) return { alreadyProcessed: true, claimedAt: null }
 
     if (!existing) {
       try {
         await prisma.paymentWebhookEvent.create({
           data: {
-            provider: "stripe",
-            eventId: event.id,
-            eventType: event.type,
-            processing: true,
-            processingAt: new Date(),
+            provider: 'stripe', eventId: event.id, eventType: event.type,
+            processing: true, processingAt: claimedAt,
           },
         })
-
-        return { alreadyProcessed: false, claimed: true }
+        return { alreadyProcessed: false, claimedAt }
       } catch (error) {
-        if (
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          (error as { code?: string }).code === "P2002"
-        ) {
-          const latest = await prisma.paymentWebhookEvent.findUnique({
-            where: { eventId: event.id },
-            select: { processedAt: true, processing: true },
-          })
-
-          if (latest?.processedAt) {
-            return { alreadyProcessed: true, claimed: false }
-          }
-
-          return { alreadyProcessed: false, claimed: false }
+        // Concurrent delivery can insert the same event first. Retry the conditional claim below.
+        if (!(error && typeof error === 'object' && 'code' in error && error.code === 'P2002')) {
+          throw error
         }
-
-        throw error
       }
     }
 
@@ -179,26 +173,24 @@ class StripePaymentProvider implements PaymentProvider {
       where: {
         eventId: event.id,
         processedAt: null,
-        processing: false,
+        OR: [
+          { processing: false },
+          { processing: true, processingAt: { lt: staleBefore } },
+          { processing: true, processingAt: null },
+        ],
       },
-      data: {
-        eventType: event.type,
-        processing: true,
-        processingAt: new Date(),
-      },
+      data: { eventType: event.type, processing: true, processingAt: claimedAt },
     })
-
-    return {
-      alreadyProcessed: false,
-      claimed: update.count > 0,
-    }
+    return { alreadyProcessed: false, claimedAt: update.count === 1 ? claimedAt : null }
   }
 
-  private async markWebhookProcessed(eventId: string): Promise<void> {
+  private async markWebhookProcessed(eventId: string, claimedAt: Date): Promise<void> {
     await prisma.paymentWebhookEvent.updateMany({
       where: {
         eventId,
         processedAt: null,
+        processing: true,
+        processingAt: claimedAt,
       },
       data: {
         processedAt: new Date(),
@@ -207,12 +199,13 @@ class StripePaymentProvider implements PaymentProvider {
     })
   }
 
-  private async releaseWebhookClaim(eventId: string): Promise<void> {
+  private async releaseWebhookClaim(eventId: string, claimedAt: Date): Promise<void> {
     await prisma.paymentWebhookEvent.updateMany({
       where: {
         eventId,
         processedAt: null,
         processing: true,
+        processingAt: claimedAt,
       },
       data: {
         processing: false,
@@ -247,12 +240,14 @@ class StripePaymentProvider implements PaymentProvider {
   private mapIntent(payload: {
     paymentIntent: StripePaymentIntent
     defaultMethod: "card"
-    defaultCurrency: "PHP"
   }): PaymentIntentResponse {
-    const { paymentIntent, defaultMethod, defaultCurrency } = payload
+    const { paymentIntent, defaultMethod } = payload
 
     if (!paymentIntent.client_secret) {
       throw new InternalServerErrorException("Stripe payment intent did not return a client_secret")
+    }
+    if (paymentIntent.currency.toUpperCase() !== 'PHP') {
+      throw new BadRequestException('Only PHP payment intents are supported')
     }
 
     return {
@@ -260,10 +255,11 @@ class StripePaymentProvider implements PaymentProvider {
       provider: "stripe",
       status: paymentIntent.status,
       amountInCents: paymentIntent.amount,
-      currency: paymentIntent.currency.toUpperCase() === "PHP" ? "PHP" : defaultCurrency,
+      currency: 'PHP',
       method: defaultMethod,
       clientSecret: paymentIntent.client_secret,
       createdAt: new Date(paymentIntent.created * 1000).toISOString(),
+      cartId: paymentIntent.metadata?.cartId,
     }
   }
 
@@ -271,6 +267,7 @@ class StripePaymentProvider implements PaymentProvider {
     amountInCents: number
     currency: "PHP"
     method: "card"
+    cartId?: string
   }): Promise<PaymentIntentResponse> {
     const Stripe = await this.loadStripe()
     const stripe = new Stripe(this.secretKey)
@@ -283,13 +280,13 @@ class StripePaymentProvider implements PaymentProvider {
       },
       metadata: {
         source: "e-commerce-checkout",
+        ...(payload.cartId ? { cartId: payload.cartId } : {}),
       },
     })
 
     return this.mapIntent({
       paymentIntent,
       defaultMethod: payload.method,
-      defaultCurrency: payload.currency,
     })
   }
 
@@ -307,7 +304,15 @@ class StripePaymentProvider implements PaymentProvider {
     return this.mapIntent({
       paymentIntent,
       defaultMethod: "card",
-      defaultCurrency: "PHP",
+    })
+  }
+
+  async getIntent(paymentIntentId: string): Promise<PaymentIntentResponse> {
+    const Stripe = await this.loadStripe()
+    const stripe = new Stripe(this.secretKey)
+    return this.mapIntent({
+      paymentIntent: await stripe.paymentIntents.retrieve(paymentIntentId),
+      defaultMethod: 'card',
     })
   }
 
@@ -318,7 +323,7 @@ class StripePaymentProvider implements PaymentProvider {
     const event = stripe.webhooks.constructEvent(rawBody, signature, this.webhookSecret)
     const claim = await this.claimWebhookEvent(event)
 
-    if (claim.alreadyProcessed || !claim.claimed) {
+    if (claim.alreadyProcessed || !claim.claimedAt) {
       return {
         received: true,
         eventType: event.type,
@@ -341,7 +346,7 @@ class StripePaymentProvider implements PaymentProvider {
             },
           })
 
-          await this.markWebhookProcessed(event.id)
+          await this.markWebhookProcessed(event.id, claim.claimedAt)
 
           return {
             received: true,
@@ -351,7 +356,7 @@ class StripePaymentProvider implements PaymentProvider {
         }
       }
 
-      await this.markWebhookProcessed(event.id)
+      await this.markWebhookProcessed(event.id, claim.claimedAt)
 
       return {
         received: true,
@@ -359,7 +364,7 @@ class StripePaymentProvider implements PaymentProvider {
         processed: false,
       }
     } catch (error) {
-      await this.releaseWebhookClaim(event.id)
+      await this.releaseWebhookClaim(event.id, claim.claimedAt)
       throw error
     }
   }
@@ -367,7 +372,56 @@ class StripePaymentProvider implements PaymentProvider {
 
 @Injectable()
 export class PaymentsService {
+  constructor(private readonly cartService?: CartService) {}
+
   private mockProvider = new MockPaymentProvider()
+
+  private async pricedCart(identity: CartRequestIdentity) {
+    if (!this.cartService) throw new InternalServerErrorException('Cart service is not available')
+    const current = await this.cartService.getCart(identity)
+    const cart = await prisma.cart.findUnique({
+      where: { id: current.id },
+      include: { items: { include: { product: true } } },
+    })
+    if (!cart || cart.status !== 'active' || cart.items.length === 0) {
+      throw new BadRequestException('Cart is empty')
+    }
+    for (const item of cart.items) {
+      if (!item.product.isActive || item.quantity > item.product.stock) {
+        throw new BadRequestException('Cart items are unavailable')
+      }
+    }
+    return {
+      cartId: cart.id,
+      subtotal: cart.items.reduce((sum, item) => sum + item.product.priceInCents * item.quantity, 0),
+    }
+  }
+
+  async createCartIntent(identity: CartRequestIdentity, payload: CreatePaymentIntentPayload): Promise<PaymentIntentResponse> {
+    if (this.resolveProviderName() === 'stripe') {
+      throw new ServiceUnavailableException('Stripe card checkout is disabled until the complete payment flow is implemented')
+    }
+    if (!payload || (payload.shippingMethod !== undefined && !['standard', 'express'].includes(payload.shippingMethod))) {
+      throw new BadRequestException('Invalid shipping method')
+    }
+    const cart = await this.pricedCart(identity)
+    const total = cart.subtotal + Math.round(cart.subtotal * 0.05) +
+      (payload.shippingMethod === 'express' ? 19900 : 0)
+    if (payload.amountInCents !== total) {
+      throw new BadRequestException('Payment amount does not match cart total')
+    }
+    return this.createIntent(payload, cart.cartId)
+  }
+
+  async confirmCartIntent(identity: CartRequestIdentity, paymentIntentId: string, payload: ConfirmPaymentIntentPayload) {
+    if (this.resolveProviderName() === 'stripe') {
+      throw new ServiceUnavailableException('Stripe card checkout is disabled until the complete payment flow is implemented')
+    }
+    const cart = await this.pricedCart(identity)
+    const intent = await this.resolveProvider().getIntent(paymentIntentId)
+    if (intent.cartId !== cart.cartId) throw new BadRequestException('Payment intent does not belong to this cart')
+    return this.confirmIntent(paymentIntentId, payload)
+  }
 
   private resolveProviderName(): PaymentProviderName {
     const configured = process.env.PAYMENT_PROVIDER?.trim().toLowerCase()
@@ -378,6 +432,11 @@ export class PaymentsService {
     throw new InternalServerErrorException(
       `Unsupported PAYMENT_PROVIDER: ${configured}. Supported values: mock, stripe`
     )
+  }
+
+  getCapabilities() {
+    // The storefront has no Stripe Elements card-entry flow yet.
+    return { cardAvailable: this.resolveProviderName() === 'mock' }
   }
 
   private resolveProvider(): PaymentProvider {
@@ -404,10 +463,10 @@ export class PaymentsService {
     return new StripePaymentProvider(stripeSecretKey, stripeWebhookSecret)
   }
 
-  async createIntent(payload: CreatePaymentIntentPayload): Promise<PaymentIntentResponse> {
+  async createIntent(payload: CreatePaymentIntentPayload, cartId?: string): Promise<PaymentIntentResponse> {
     const amountInCents = Number(payload.amountInCents ?? 0)
 
-    if (!Number.isFinite(amountInCents) || amountInCents < 1) {
+    if (!Number.isSafeInteger(amountInCents) || amountInCents < 1) {
       throw new BadRequestException("amountInCents must be at least 1")
     }
 
@@ -427,7 +486,16 @@ export class PaymentsService {
       amountInCents,
       currency,
       method,
+      cartId,
     })
+  }
+
+  async verifySuccessfulIntent(paymentIntentId: string, expectedAmount: number, cartId?: string): Promise<void> {
+    const intent = await this.resolveProvider().getIntent(paymentIntentId)
+    if (intent.status !== 'succeeded' || intent.amountInCents !== expectedAmount || intent.currency !== 'PHP' ||
+        (cartId !== undefined && intent.cartId !== cartId)) {
+      throw new BadRequestException('Payment is not completed for this order total')
+    }
   }
 
   async confirmIntent(

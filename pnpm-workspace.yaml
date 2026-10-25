@@ -1,3 +1,14 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+allowBuilds:
+  "@biomejs/biome": true
+  "@nestjs/core": true
+  "@prisma/engines": true
+  better-sqlite3: true
+  esbuild: true
+  msw: true
+  prisma: true
+  sharp: true
+  unrs-resolver: true

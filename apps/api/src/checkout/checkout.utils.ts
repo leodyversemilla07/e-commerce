@@ -1,9 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
-import type { Session } from 'better-auth';
 import type { Request } from 'express';
 
-import type { User } from '../generated/prisma/client';
 import type { CheckoutRequestIdentity } from './checkout.types';
 
 const GUEST_CART_COOKIE = 'guest_cart_id';
@@ -31,10 +29,10 @@ function getOrCreateGuestId(req: Request) {
 }
 
 export function getCheckoutIdentity(req: Request): CheckoutRequestIdentity {
-  const authPayload = (req as Request & { auth?: { session?: Session | null; user?: User | null } }).auth;
+  const user = (req as Request & { user?: { id: string } | null }).user;
 
   return {
-    userId: authPayload?.user?.id ?? null,
+    userId: user?.id ?? null,
     guestId: getOrCreateGuestId(req),
   };
 }

@@ -1,8 +1,10 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
 import { prisma } from '../prisma';
+import { AdminApiGuard } from './admin-api.guard';
 
 @AllowAnonymous()
+@UseGuards(AdminApiGuard)
 @Controller('admin/analytics')
 export class AdminAnalyticsController {
   @Get('overview')
@@ -12,7 +14,7 @@ export class AdminAnalyticsController {
       await Promise.all([
         prisma.order.aggregate({
           _sum: { totalInCents: true },
-          where: { status: { not: 'CANCELLED' } },
+          where: { status: { in: ['CONFIRMED', 'SHIPPED', 'DELIVERED'] } },
         }),
         prisma.order.count(),
         prisma.product.count(),
@@ -43,7 +45,7 @@ export class AdminAnalyticsController {
     const orders = await prisma.order.findMany({
       where: {
         createdAt: { gte: startDate },
-        status: { not: 'CANCELLED' },
+        status: { in: ['CONFIRMED', 'SHIPPED', 'DELIVERED'] },
       },
       select: { createdAt: true, totalInCents: true },
       orderBy: { createdAt: 'asc' },
@@ -97,6 +99,7 @@ export class AdminAnalyticsController {
 
     const topProducts = await prisma.orderItem.groupBy({
       by: ['productId'],
+      where: { order: { status: { in: ['CONFIRMED', 'SHIPPED', 'DELIVERED'] } } },
       _sum: { lineTotalInCents: true, quantity: true },
       orderBy: { _sum: { lineTotalInCents: 'desc' } },
       take: numLimit,
@@ -122,7 +125,7 @@ export class AdminAnalyticsController {
   async getRevenueByCategory() {
     const orderItems = await prisma.orderItem.findMany({
       where: {
-        order: { status: { not: 'CANCELLED' } },
+        order: { status: { in: ['CONFIRMED', 'SHIPPED', 'DELIVERED'] } },
       },
       select: {
         lineTotalInCents: true,

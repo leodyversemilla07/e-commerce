@@ -208,14 +208,13 @@ const products: ProductSeed[] = [
 ];
 
 async function seed() {
-  await prisma.product.deleteMany();
-  await prisma.category.deleteMany();
-
   const categoryMap = new Map<string, string>();
 
   for (const category of categories) {
-    const created = await prisma.category.create({
-      data: category,
+    const created = await prisma.category.upsert({
+      where: { slug: category.slug },
+      create: category,
+      update: {},
     });
 
     categoryMap.set(category.slug, created.id);
@@ -228,8 +227,10 @@ async function seed() {
       throw new Error(`Category not found for slug: ${product.categorySlug}`);
     }
 
-    await prisma.product.create({
-      data: {
+    await prisma.product.upsert({
+      where: { slug: product.slug },
+      update: {},
+      create: {
         slug: product.slug,
         name: product.name,
         description: product.description,
@@ -242,7 +243,7 @@ async function seed() {
     });
   }
 
-  console.log(`Seeded ${categories.length} categories and ${products.length} products`);
+  console.log(`Ensured ${categories.length} categories and ${products.length} products exist`);
 }
 
 seed()

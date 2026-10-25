@@ -1,8 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 
 import { prisma } from '../prisma';
-import type { OrderStatus } from '../generated/prisma/client';
-import type { OrdersRequestIdentity } from './orders.types';
+import type { OrderStatus, OrdersRequestIdentity } from './orders.types';
 
 const DEFAULT_PAGE_LIMIT = 20;
 const MAX_PAGE_LIMIT = 100;
@@ -22,12 +21,15 @@ export class OrdersService {
     identity: OrdersRequestIdentity,
     options: { limit?: number; cursor?: string } = {},
   ) {
+    if (options.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit < 1)) {
+      throw new BadRequestException('limit must be a positive integer');
+    }
     const limit = Math.min(options.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
     const cursor = options.cursor;
 
     const orders = await prisma.order.findMany({
       where: this.whereForIdentity(identity),
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       include: {
         items: {
           orderBy: { createdAt: 'asc' },
@@ -126,24 +128,50 @@ export class OrdersService {
   }
 
   async updateOrderStatus(orderId: string, status: OrderStatus) {
-    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    return prisma.$transaction(async (tx) => {
+      const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
+      if (!order) throw new NotFoundException('Order not found');
+      if (order.status === status) return order;
+      const allowed: Record<OrderStatus, OrderStatus[]> = {
+        PENDING: ['CONFIRMED', 'CANCELLED'],
+        CONFIRMED: ['SHIPPED', 'CANCELLED'],
+        SHIPPED: ['DELIVERED'],
+        DELIVERED: [],
+        CANCELLED: [],
+      };
+      if (!(allowed[order.status as OrderStatus] ?? []).includes(status)) {
+        throw new BadRequestException(`Cannot change order from ${order.status} to ${status}`);
+      }
+      if (status === 'CANCELLED' && order.paymentIntentId) {
+        throw new BadRequestException('Paid orders require a refund before cancellation');
+      }
 
-    if (!order) {
-      throw new NotFoundException('Order not found');
-    }
-
-    return prisma.order.update({
-      where: { id: orderId },
-      data: { status },
+      const changed = await tx.order.updateMany({
+        where: { id: orderId, status: order.status },
+        data: { status },
+      });
+      if (changed.count !== 1) throw new BadRequestException('Order status changed; retry');
+      if (status === 'CANCELLED') {
+        for (const item of order.items) {
+          await tx.product.update({
+            where: { id: item.productId },
+            data: { stock: { increment: item.quantity } },
+          });
+        }
+      }
+      return { ...order, status };
     });
   }
 
   async listAllOrders(options: { limit?: number; cursor?: string } = {}) {
+    if (options.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit < 1)) {
+      throw new BadRequestException('limit must be a positive integer');
+    }
     const limit = Math.min(options.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
     const cursor = options.cursor;
 
     const orders = await prisma.order.findMany({
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       include: {
         items: {
           include: {
@@ -167,6 +195,7 @@ export class OrdersService {
         customerName: order.customerName,
         customerEmail: order.customerEmail,
         totalInCents: order.totalInCents,
+        hasCardPayment: Boolean(order.paymentIntentId),
         itemCount: order.items.reduce((sum, item) => sum + item.quantity, 0),
         createdAt: order.createdAt,
         updatedAt: order.updatedAt,

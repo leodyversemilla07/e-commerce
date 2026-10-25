@@ -50,7 +50,7 @@ A full-stack e-commerce application built as a monorepo — product catalog, sho
 - Revenue and order analytics with charts
 - Order management with status updates
 - Product CRUD (create, edit, feature, deactivate, delete)
-- Stock management
+- Stock management (inventory is reserved at checkout and restored on eligible cancellations; paid orders cannot be cancelled until a refund workflow exists)
 
 **Auth**
 - Email/password authentication via BetterAuth
@@ -88,17 +88,18 @@ Required keys:
 - BETTER_AUTH_URL (API base URL for Better Auth)
 - BETTER_AUTH_SECRET (long random secret)
 - BETTER_AUTH_TRUSTED_ORIGINS (comma-separated allowed origins, e.g. http://localhost:3000)
-- DATABASE_URL (PostgreSQL connection string)
-- ADMIN_PASSWORD (admin panel gate password)
+- DATABASE_URL (PostgreSQL connection string in normal mode; set automatically in temporary SQLite mode)
+- ADMIN_PASSWORD (32+ character admin panel password, web only)
+- ADMIN_API_SECRET (separate 32+ character secret shared by API and web servers)
 - PORT (API port; default 4000)
 
 Email (password reset):
-- RESEND_API_KEY — get a free key at https://resend.com. Omit in local dev to fall back to console logging.
+- RESEND_API_KEY — get a free key at https://resend.com. Omit only in local dev to log reset links; production password resets fail closed without it.
 - RESEND_FROM_EMAIL — must be a verified sender in your Resend account (e.g. no-reply@yourdomain.com)
 
 Payments:
-- PAYMENT_PROVIDER=mock for local/demo
-- PAYMENT_PROVIDER=stripe for real cards (requires STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET)
+- PAYMENT_PROVIDER=mock for local/demo (never treat mock payments as real money)
+- PAYMENT_PROVIDER=stripe requires STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET. **Do not enable for live sales yet:** both the storefront and payment-intent API disable card checkout in Stripe mode until a Stripe Elements flow and payment/order reconciliation are implemented.
 
 ## Quick Start
 
@@ -123,9 +124,24 @@ pnpm run dev:all
 - Frontend: http://localhost:3000
 - API: http://localhost:4000
 
+### Temporary local SQLite (no PostgreSQL/Docker needed)
+
+The production schema, migrations, and deployment remain **PostgreSQL**. SQLite uses a derived local-only schema and `db push`; do not use it for production or apply PostgreSQL migrations to it. SQLite tests do not replace PostgreSQL-specific concurrency/migration tests.
+
+```bash
+pnpm install
+cp .env.example apps/api/.env
+cp .env.example apps/web/.env.local
+pnpm --dir apps/api run db:sqlite:setup
+pnpm --dir apps/api run db:sqlite:seed
+pnpm run dev:sqlite
+```
+
+The ignored database is `apps/api/dev.sqlite`. Run `pnpm --dir apps/api run test:e2e` for a disposable HTTP integration test (no PostgreSQL needed). SQLite setup regenerates the Prisma client, so stop the API before switching providers. To switch back to PostgreSQL, run `pnpm --dir apps/api run db:generate` (with a PostgreSQL `DATABASE_URL`), then `pnpm run dev:all`. The seed command is safe to repeat and does not overwrite existing products or orders.
+
 ## Railway Deployment
 
-Each app has its own `railway.toml`. Deploy them as two separate Railway services connected to the same Postgres database add-on:
+Each app has its own `railway.toml`. Deploy them as two separate Railway services connected to the same Postgres database add-on. Use same-site hostnames (for example `shop.example.com` and `api.example.com`) for browser session/guest cookies; unrelated domains may block credentialed requests due to third-party cookie restrictions:
 
 1. Create a new Railway project and add a **PostgreSQL** plugin.
 2. Add two services — point one at `apps/api` and one at `apps/web`.
@@ -141,7 +157,8 @@ Each app has its own `railway.toml`. Deploy them as two separate Railway service
 | `BETTER_AUTH_SECRET` | yes | yes | Same secure random value on both services |
 | `BETTER_AUTH_TRUSTED_ORIGINS` | yes | no | Web origin(s), comma-separated |
 | `NEXT_PUBLIC_AUTH_BASE_URL` | no | yes | Public API origin used by the browser |
-| `ADMIN_PASSWORD` | no | yes | Admin route password gate |
+| `ADMIN_PASSWORD` | no | yes | Admin route password gate (32+ characters) |
+| `ADMIN_API_SECRET` | yes | yes | Shared server-to-server admin API secret (32+ characters) |
 | `RESEND_API_KEY` | yes | no | Required for production password reset / order emails |
 | `RESEND_FROM_EMAIL` | yes | no | Verified Resend sender |
 | `PAYMENT_PROVIDER` | yes | no | `mock` or `stripe` |
@@ -152,7 +169,7 @@ Each app has its own `railway.toml`. Deploy them as two separate Railway service
 
 1) Environment
 - Configure all required env vars in production (see section above)
-- Use secure values for BETTER_AUTH_SECRET and ADMIN_PASSWORD
+- Use secure values for BETTER_AUTH_SECRET, ADMIN_PASSWORD, and ADMIN_API_SECRET
 - Set BETTER_AUTH_TRUSTED_ORIGINS to your deployed web origin(s)
 - Ensure DATABASE_URL points to production Postgres
 - Validate env locally or in deployment logs:
@@ -175,6 +192,7 @@ pnpm run lint
 pnpm run typecheck
 pnpm run build
 pnpm --dir apps/api run test --runInBand
+pnpm --dir apps/api run test:e2e   # disposable local SQLite HTTP integration
 ```
 
 4) Run apps

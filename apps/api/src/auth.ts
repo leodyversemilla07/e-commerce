@@ -1,27 +1,31 @@
 import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 
-import { prisma } from './prisma';
+import { apiEnv, prisma } from './prisma';
 
-const apiBaseURL = process.env.BETTER_AUTH_URL ?? 'http://localhost:4000';
-const apiURL = new URL(apiBaseURL);
-const defaultTrustedOrigins = [
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  `${apiURL.protocol}//${apiURL.hostname}:3000`,
-];
+const apiBaseURL = apiEnv.BETTER_AUTH_URL;
+function escapeAttribute(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[char] ?? char);
+}
 
 async function sendPasswordResetEmail(email: string, url: string): Promise<void> {
-  const apiKey = process.env.RESEND_API_KEY?.trim();
+  const apiKey = apiEnv.RESEND_API_KEY;
 
   if (!apiKey) {
-    // No email provider configured — log the link so local dev still works.
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Password-reset email is not configured');
+    }
+    // Local development only: never print reset tokens in production logs.
     console.log(`[auth] password-reset link for ${email}: ${url}`);
     return;
   }
 
-  const from =
-    process.env.RESEND_FROM_EMAIL?.trim() ?? 'no-reply@leodyversemilla07.com';
+  const from = apiEnv.RESEND_FROM_EMAIL;
+  if (!from && process.env.NODE_ENV === 'production') {
+    throw new Error('RESEND_FROM_EMAIL is required in production');
+  }
 
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -30,30 +34,27 @@ async function sendPasswordResetEmail(email: string, url: string): Promise<void>
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from,
+      from: from ?? 'no-reply@leodyversemilla07.com',
       to: [email],
       subject: 'Reset your password',
       html: `
         <p>You requested a password reset.</p>
-        <p><a href="${url}">Click here to reset your password</a></p>
+        <p><a href="${escapeAttribute(url)}">Click here to reset your password</a></p>
         <p>This link expires in 1 hour. If you did not request this, you can safely ignore this email.</p>
       `.trim(),
     }),
   });
 
   if (!response.ok) {
-    const body = await response.text();
-    console.error(`[auth] failed to send password-reset email to ${email}: ${response.status} ${body}`);
+    throw new Error(`Password-reset email delivery failed (${response.status})`);
   }
 }
 
 export const auth = betterAuth({
-  secret:
-    process.env.BETTER_AUTH_SECRET ??
-    'dev-only-change-me-please-32-chars-minimum!',
+  secret: apiEnv.BETTER_AUTH_SECRET,
   baseURL: apiBaseURL,
   database: prismaAdapter(prisma, {
-    provider: 'postgresql',
+    provider: apiEnv.DB_PROVIDER === 'sqlite' ? 'sqlite' : 'postgresql',
   }),
   emailAndPassword: {
     enabled: true,
@@ -61,7 +62,5 @@ export const auth = betterAuth({
       await sendPasswordResetEmail(user.email, url);
     },
   },
-  trustedOrigins:
-    process.env.BETTER_AUTH_TRUSTED_ORIGINS?.split(',').map((s) => s.trim()) ??
-    defaultTrustedOrigins,
+  trustedOrigins: apiEnv.BETTER_AUTH_TRUSTED_ORIGINS.split(',').map((s) => s.trim()),
 });

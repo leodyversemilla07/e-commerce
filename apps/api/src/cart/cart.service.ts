@@ -192,7 +192,7 @@ export class CartService {
   }
 
   async addItem(identity: CartRequestIdentity, payload: CartItemPayload) {
-    if (payload.quantity < 1) {
+    if (!Number.isSafeInteger(payload.quantity) || payload.quantity < 1) {
       throw new BadRequestException('Quantity must be at least 1');
     }
 
@@ -252,7 +252,7 @@ export class CartService {
   }
 
   async updateItemQuantity(identity: CartRequestIdentity, itemId: string, quantity: number) {
-    if (quantity < 1) {
+    if (!Number.isSafeInteger(quantity) || quantity < 1) {
       throw new BadRequestException('Quantity must be at least 1');
     }
 

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -7,11 +8,14 @@ import {
   Param,
   Patch,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
 import { prisma } from '../prisma';
+import { AdminApiGuard } from '../admin/admin-api.guard';
 
 @AllowAnonymous()
+@UseGuards(AdminApiGuard)
 @Controller('admin/products')
 export class AdminProductsController {
   @Get()
@@ -85,6 +89,10 @@ export class AdminProductsController {
       categoryId: string;
     },
   ) {
+    if (!Number.isSafeInteger(body.priceInCents) || body.priceInCents < 0 ||
+        !Number.isSafeInteger(body.stock ?? 0) || (body.stock ?? 0) < 0) {
+      throw new BadRequestException('Price and stock must be non-negative integers');
+    }
     const product = await prisma.product.create({
       data: {
         name: body.name,
@@ -128,6 +136,10 @@ export class AdminProductsController {
       stock?: number;
     },
   ) {
+    if ((body.priceInCents !== undefined && (!Number.isSafeInteger(body.priceInCents) || body.priceInCents < 0)) ||
+        (body.stock !== undefined && (!Number.isSafeInteger(body.stock) || body.stock < 0))) {
+      throw new BadRequestException('Price and stock must be non-negative integers');
+    }
     const product = await prisma.product.update({
       where: { id },
       data: {

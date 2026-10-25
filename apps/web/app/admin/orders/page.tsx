@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { adminServerFetch } from '@/lib/admin-api'
 
 import { formatPHP } from "@/lib/catalog"
 import { formatOrderStatus, getOrderStatusVariant } from "@/lib/orders"
@@ -7,31 +8,30 @@ import { AdminStatusUpdater } from "@/components/admin-status-updater"
 import { Badge } from "@workspace/ui/components/badge"
 import { Card, CardContent } from "@workspace/ui/components/card"
 
-function resolveApiBaseURL() {
-  if (process.env.NEXT_PUBLIC_AUTH_BASE_URL) return process.env.NEXT_PUBLIC_AUTH_BASE_URL
-  if (process.env.BETTER_AUTH_URL) return process.env.BETTER_AUTH_URL
-  return "http://localhost:4000"
-}
-
 type OrderItem = {
   id: string
   status: string
   customerName: string
   customerEmail: string
   totalInCents: number
+  hasCardPayment: boolean
   itemCount: number
   createdAt: string
 }
 
 async function getOrders(): Promise<OrderItem[]> {
-  try {
-    const res = await fetch(`${resolveApiBaseURL()}/admin/orders`, { cache: "no-store" })
-    if (!res.ok) return []
-    const data = (await res.json()) as { items: OrderItem[] }
-    return data.items
-  } catch {
-    return []
-  }
+  const items: OrderItem[] = []
+  let cursor: string | null = null
+  do {
+    const path: string = cursor ? `orders?limit=100&cursor=${encodeURIComponent(cursor)}` : 'orders?limit=100'
+    const res: Response = await adminServerFetch(path)
+    if (!res.ok) throw new Error('Failed to fetch admin orders')
+    const page: { items: OrderItem[]; nextCursor: string | null } = await res.json()
+    items.push(...page.items)
+    if (page.nextCursor && page.nextCursor === cursor) throw new Error('Admin order pagination did not advance')
+    cursor = page.nextCursor
+  } while (cursor)
+  return items
 }
 
 type AdminOrdersPageProps = {
@@ -148,7 +148,7 @@ export default async function AdminOrdersPage({ searchParams }: AdminOrdersPageP
                       {formatPHP(order.totalInCents)}
                     </Link>
                   </div>
-                  <AdminStatusUpdater orderId={order.id} currentStatus={order.status} />
+                  <AdminStatusUpdater orderId={order.id} currentStatus={order.status} hasCardPayment={order.hasCardPayment} />
                 </div>
               </CardContent>
             </Card>

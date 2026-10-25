@@ -2,6 +2,7 @@ export type CreatePaymentIntentPayload = {
   amountInCents: number
   currency?: "PHP"
   method?: "card"
+  shippingMethod?: "standard" | "express"
 }
 
 export type ConfirmPaymentIntentPayload = {
@@ -24,6 +25,8 @@ export type PaymentIntentResponse = {
   method: "card"
   clientSecret: string
   createdAt: string
+  // Internal binding used to prevent an intent from being reused for another cart.
+  cartId?: string
 }
 
 export type PaymentWebhookResult = {

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 
 import { prisma } from '../prisma';
 
@@ -27,12 +27,15 @@ export class ProductsService {
     items: ProductListItem[];
     nextCursor: string | null;
   }> {
+    if (options.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit < 1)) {
+      throw new BadRequestException('limit must be a positive integer');
+    }
     const limit = Math.min(options.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
     const cursor = options.cursor;
 
     const rows = await prisma.product.findMany({
       where: { isActive: true },
-      orderBy: [{ isFeatured: 'desc' }, { createdAt: 'desc' }],
+      orderBy: [{ isFeatured: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       select: {
         id: true,
         name: true,

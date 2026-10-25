@@ -2,6 +2,7 @@ export type CreatePaymentIntentPayload = {
   amountInCents: number
   currency?: "PHP"
   method?: "card"
+  shippingMethod?: "standard" | "express"
 }
 
 export type ConfirmPaymentIntentPayload = {
@@ -56,6 +57,12 @@ function extractErrorMessage(payload: unknown, fallback: string) {
 
 async function parseJSON<T>(response: Response): Promise<T> {
   return (await response.json()) as T
+}
+
+export async function getPaymentCapabilities(): Promise<{ cardAvailable: boolean }> {
+  const response = await fetch(`${resolveApiBaseURL()}/payments/capabilities`, { cache: 'no-store' })
+  if (!response.ok) throw new Error('Unable to load payment methods')
+  return parseJSON<{ cardAvailable: boolean }>(response)
 }
 
 export async function createPaymentIntent(

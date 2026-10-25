@@ -12,6 +12,7 @@
     "dev:web": "pnpm --dir apps/web dev",
     "dev:api": "pnpm --dir apps/api dev",
     "dev:all": "concurrently -n web,api -c cyan,magenta \"pnpm run dev:web\" \"pnpm run dev:api\"",
+    "dev:sqlite": "concurrently -n web,api -c cyan,magenta \"pnpm run dev:web\" \"pnpm --dir apps/api run dev:sqlite\"",
     "smoke:postdeploy": "node scripts/post-deploy-smoke.mjs",
     "smoke:payments": "node scripts/e2e-payment-check.js",
     "validate:env": "node scripts/validate-env.mjs --service=all",
@@ -21,12 +22,13 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@workspace/eslint-config": "workspace:*",
+    "@workspace/env": "workspace:*",
     "@workspace/typescript-config": "workspace:*",
     "concurrently": "^9.2.1",
     "turbo": "^2.8.17",
     "typescript": "5.9.3"
   },
-  "packageManager": "pnpm@10.33.2",
+  "packageManager": "pnpm@12.7.0",
   "engines": {
     "node": ">=20"
   },
@@ -34,19 +36,6 @@
     "apps/*",
     "packages/*"
   ],
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@biomejs/biome",
-      "@nestjs/core",
-      "@prisma/engines",
-      "better-sqlite3",
-      "esbuild",
-      "msw",
-      "prisma",
-      "sharp",
-      "unrs-resolver"
-    ]
-  },
   "dependencies": {
     "lucide-react": "^1.8.0"
   }

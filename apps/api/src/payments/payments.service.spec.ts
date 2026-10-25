@@ -1,10 +1,11 @@
-import { BadRequestException, InternalServerErrorException } from "@nestjs/common"
+import { BadRequestException, InternalServerErrorException, ServiceUnavailableException } from "@nestjs/common"
 
 import { prisma } from "../prisma"
-import { PaymentsService } from "./payments.service"
+import { PaymentsService, StripePaymentProvider } from "./payments.service"
 
 jest.mock("../prisma", () => ({
   prisma: {
+    cart: { findUnique: jest.fn() },
     order: {
       updateMany: jest.fn(),
     },
@@ -19,6 +20,7 @@ jest.mock("../prisma", () => ({
 describe("PaymentsService", () => {
   const originalEnv = { ...process.env }
   const mockedPrisma = prisma as unknown as {
+    cart: { findUnique: jest.Mock }
     order: {
       updateMany: jest.Mock
     }
@@ -43,6 +45,45 @@ describe("PaymentsService", () => {
 
   afterAll(() => {
     process.env = originalEnv
+  })
+
+  it('reclaims a stale Stripe webhook lease and scopes completion to that lease', async () => {
+    const provider = new StripePaymentProvider('sk_test', 'whsec_test') as unknown as {
+      claimWebhookEvent: (event: { id: string; type: string }) => Promise<{ claimedAt: Date | null }>
+      markWebhookProcessed: (id: string, claimedAt: Date) => Promise<void>
+      releaseWebhookClaim: (id: string, claimedAt: Date) => Promise<void>
+    }
+    mockedPrisma.paymentWebhookEvent.findUnique.mockResolvedValue({ processedAt: null, processing: true })
+    const claim = await provider.claimWebhookEvent({ id: 'evt_1', type: 'payment_intent.succeeded' })
+    expect(claim.claimedAt).toBeInstanceOf(Date)
+    if (!claim.claimedAt) throw new Error('Webhook claim was not acquired')
+    expect(mockedPrisma.paymentWebhookEvent.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          eventId: 'evt_1',
+          OR: expect.arrayContaining([{ processing: true, processingAt: expect.objectContaining({ lt: expect.any(Date) }) }]),
+        }),
+      }),
+    )
+    await provider.markWebhookProcessed('evt_1', claim.claimedAt)
+    await provider.releaseWebhookClaim('evt_1', claim.claimedAt)
+    for (const call of mockedPrisma.paymentWebhookEvent.updateMany.mock.calls.slice(1)) {
+      expect(call[0].where.processingAt).toEqual(claim.claimedAt)
+    }
+  })
+
+  it('does not claim a webhook already processed or leased by another worker', async () => {
+    const provider = new StripePaymentProvider('sk_test', 'whsec_test') as unknown as {
+      claimWebhookEvent: (event: { id: string; type: string }) => Promise<{ claimedAt: Date | null; alreadyProcessed: boolean }>
+    }
+    mockedPrisma.paymentWebhookEvent.findUnique.mockResolvedValue({ processedAt: new Date() })
+    const processed = await provider.claimWebhookEvent({ id: 'evt_1', type: 'payment_intent.succeeded' })
+    expect(processed).toEqual({ alreadyProcessed: true, claimedAt: null })
+    expect(mockedPrisma.paymentWebhookEvent.updateMany).not.toHaveBeenCalled()
+    mockedPrisma.paymentWebhookEvent.findUnique.mockResolvedValue({ processedAt: null, processing: true })
+    mockedPrisma.paymentWebhookEvent.updateMany.mockResolvedValue({ count: 0 })
+    const inFlight = await provider.claimWebhookEvent({ id: 'evt_2', type: 'payment_intent.succeeded' })
+    expect(inFlight.claimedAt).toBeNull()
   })
 
   it("creates mock card payment intent by default", async () => {
@@ -74,6 +115,40 @@ describe("PaymentsService", () => {
     expect(confirmed.status).toBe("succeeded")
   })
 
+  it('requires a succeeded payment for the exact order total', async () => {
+    const service = new PaymentsService()
+    const intent = await service.createIntent({ amountInCents: 2200 })
+    await expect(service.verifySuccessfulIntent(intent.id, 2200)).rejects.toBeInstanceOf(BadRequestException)
+    await service.confirmIntent(intent.id, {})
+    await expect(service.verifySuccessfulIntent(intent.id, 100)).rejects.toBeInstanceOf(BadRequestException)
+    await expect(service.verifySuccessfulIntent(intent.id, 2200)).resolves.toBeUndefined()
+  })
+
+  it('binds payment intents to the priced cart and rejects a different cart', async () => {
+    const cartService = { getCart: jest.fn().mockResolvedValue({ id: 'cart-1' }) }
+    mockedPrisma.cart.findUnique.mockResolvedValue({
+      id: 'cart-1', status: 'active', items: [
+        { quantity: 2, product: { isActive: true, stock: 5, priceInCents: 1000 } },
+      ],
+    })
+    const service = new PaymentsService(cartService as never)
+    await expect(service.createCartIntent({ userId: null, guestId: 'guest-1' }, {
+      amountInCents: 100,
+    })).rejects.toBeInstanceOf(BadRequestException)
+    const intent = await service.createCartIntent({ userId: null, guestId: 'guest-1' }, {
+      amountInCents: 2100,
+    })
+    expect(intent.cartId).toBe('cart-1')
+    cartService.getCart.mockResolvedValue({ id: 'cart-2' })
+    mockedPrisma.cart.findUnique.mockResolvedValue({ id: 'cart-2', status: 'active', items: [
+      { quantity: 2, product: { isActive: true, stock: 5, priceInCents: 1000 } },
+    ] })
+    await expect(service.confirmCartIntent({ userId: null, guestId: 'guest-2' }, intent.id, {}))
+      .rejects.toBeInstanceOf(BadRequestException)
+    await expect(service.verifySuccessfulIntent(intent.id, 2100, 'cart-2'))
+      .rejects.toBeInstanceOf(BadRequestException)
+  })
+
   it("handles webhook as no-op for mock provider", async () => {
     const service = new PaymentsService()
 
@@ -84,6 +159,16 @@ describe("PaymentsService", () => {
       eventType: "mock.webhook",
       processed: false,
     })
+  })
+
+  it('refuses to create live Stripe charges before the card flow is ready', async () => {
+    process.env.PAYMENT_PROVIDER = 'stripe'
+    const service = new PaymentsService()
+    expect(service.getCapabilities()).toEqual({ cardAvailable: false })
+    await expect(service.createCartIntent({ userId: null, guestId: 'guest-1' }, { amountInCents: 100 }))
+      .rejects.toBeInstanceOf(ServiceUnavailableException)
+    await expect(service.confirmCartIntent({ userId: null, guestId: 'guest-1' }, 'pi_123', {}))
+      .rejects.toBeInstanceOf(ServiceUnavailableException)
   })
 
   it("fails with helpful error if stripe provider selected but stripe SDK missing", async () => {

@@ -1,76 +1,65 @@
+// Mock-provider smoke test. Requires at least one active, in-stock product.
 const baseUrl = process.env.BASE_URL || "http://127.0.0.1:4000"
 
-function pretty(value) {
-  return JSON.stringify(value, null, 2)
+if (process.env.PAYMENT_PROVIDER === 'stripe') {
+  console.error('This mock payment smoke script cannot safely test live Stripe charges.')
+  process.exit(1)
 }
 
+let cookie = ''
+
 async function request(path, options = {}) {
-  const url = `${baseUrl}${path}`
-  const response = await fetch(url, {
+  const response = await fetch(`${baseUrl}${path}`, {
     ...options,
     headers: {
-      "content-type": "application/json",
+      'content-type': 'application/json',
+      ...(cookie ? { cookie } : {}),
       ...(options.headers || {}),
     },
   })
-
-  const body = await response.text()
-  let parsed = null
-  try {
-    parsed = body ? JSON.parse(body) : null
-  } catch {
-    parsed = body
-  }
-
-  return {
-    ok: response.ok,
-    status: response.status,
-    body: parsed,
-  }
+  const guestCookie = response.headers.getSetCookie().find((value) => value.startsWith('guest_cart_id='))
+  if (guestCookie) cookie = guestCookie.split(';')[0]
+  const text = await response.text()
+  let body
+  try { body = JSON.parse(text) } catch { body = text }
+  return { ok: response.ok, status: response.status, body }
 }
 
 async function main() {
-  console.log("Running payment endpoint smoke checks against", baseUrl)
+  const catalog = await request('/products')
+  if (!catalog.ok) throw new Error(`Catalog failed: ${catalog.status}`)
+  const product = catalog.body.items?.find((item) => item.stock > 0 && item.priceInCents > 0)
+  if (!product) throw new Error('No in-stock product available for smoke test')
 
-  const intent = await request("/payments/intents", {
-    method: "POST",
-    body: JSON.stringify({ amountInCents: 12345, currency: "PHP", method: "card" }),
+  const cart = await request('/cart/items', {
+    method: 'POST',
+    body: JSON.stringify({ productId: product.id, quantity: 1 }),
   })
+  if (!cart.ok) throw new Error(`Add to cart failed: ${JSON.stringify(cart)}`)
+  const subtotal = product.priceInCents
+  const total = subtotal + Math.round(subtotal * 0.05)
 
-  if (!intent.ok) {
-    console.error("create intent failed", pretty(intent))
-    process.exit(1)
+  const intent = await request('/payments/intents', {
+    method: 'POST',
+    body: JSON.stringify({ amountInCents: total, currency: 'PHP', method: 'card', shippingMethod: 'standard' }),
+  })
+  if (!intent.ok) throw new Error(`Create intent failed: ${JSON.stringify(intent)}`)
+  if (intent.body.amountInCents !== total || intent.body.cartId !== cart.body.id) {
+    throw new Error('Intent is not bound to the priced cart')
   }
 
-  console.log("create intent OK", pretty(intent.body))
-
-  const confirm = await request(`/payments/intents/${intent.body.id}/confirm`, {
-    method: "POST",
-    body: JSON.stringify({}),
+  const confirm = await request(`/payments/intents/${encodeURIComponent(intent.body.id)}/confirm`, {
+    method: 'POST', body: '{}',
   })
-
-  if (!confirm.ok) {
-    console.error("confirm intent failed", pretty(confirm))
-    process.exit(1)
+  if (!confirm.ok || confirm.body.status !== 'succeeded') {
+    throw new Error(`Confirm intent failed: ${JSON.stringify(confirm)}`)
   }
 
-  console.log("confirm intent OK", pretty(confirm.body))
-
-  const webhookMissingSig = await fetch(`${baseUrl}/payments/webhook`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ type: "payment_intent.succeeded" }),
+  const webhook = await request('/payments/webhook', {
+    method: 'POST', body: JSON.stringify({ type: 'payment_intent.succeeded' }),
   })
-
-  const webhookBody = await webhookMissingSig.text()
-  console.log("webhook missing signature status", webhookMissingSig.status, webhookBody)
-
-  if (webhookMissingSig.status !== 400) {
-    console.error("expected 400 for missing stripe-signature header")
-    process.exit(1)
-  }
-
-  console.log("All smoke checks passed.")
+  if (webhook.status !== 400) throw new Error(`Expected missing webhook signature to fail: ${JSON.stringify(webhook)}`)
+  console.log('Mock payment smoke checks passed.')
 }
 
 main().catch((error) => {

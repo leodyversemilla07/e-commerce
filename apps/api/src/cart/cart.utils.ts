@@ -1,8 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Request, Response } from 'express';
-import type { Session } from 'better-auth';
-import type { User } from '../generated/prisma/client';
 import type { CartRequestIdentity } from './cart.types';
 
 const GUEST_CART_COOKIE = 'guest_cart_id';
@@ -33,7 +31,7 @@ function getOrCreateGuestId(req: Request, res: Response) {
   res.cookie(GUEST_CART_COOKIE, guestId, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: false,
+    secure: process.env.NODE_ENV === 'production',
     maxAge: ONE_YEAR_IN_SECONDS * 1000,
     path: '/',
   });
@@ -42,10 +40,11 @@ function getOrCreateGuestId(req: Request, res: Response) {
 }
 
 export function getCartIdentity(req: Request, res: Response): CartRequestIdentity {
-  const authPayload = (req as Request & { auth?: { session?: Session | null; user?: User | null } }).auth;
+  // @thallesp/nestjs-better-auth attaches the resolved user to req.user.
+  const user = (req as Request & { user?: { id: string } | null }).user;
 
   return {
-    userId: authPayload?.user?.id ?? null,
+    userId: user?.id ?? null,
     guestId: getOrCreateGuestId(req, res),
   };
 }

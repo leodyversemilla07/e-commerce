@@ -1,4 +1,14 @@
 import { formatPHP } from "./catalog"
+import { adminServerFetch } from './admin-api'
+
+function apiBaseURL() {
+  return process.env.NEXT_PUBLIC_AUTH_BASE_URL ?? `${window.location.protocol}//${window.location.hostname}:4000`
+}
+
+function adminFetch(path: string, init: RequestInit = {}) {
+  if (typeof window === 'undefined') return adminServerFetch(path, init)
+  return fetch(`/api/admin/backend/${path}`, init)
+}
 
 type OrderItem = {
   id: string
@@ -39,6 +49,7 @@ export type OrderDetail = {
   shippingFeeInCents: number
   taxInCents: number
   totalInCents: number
+  hasCardPayment?: boolean
   itemCount: number
   customerEmail: string
   customerName: string
@@ -54,43 +65,32 @@ export type OrderDetail = {
   items: OrderItem[]
 }
 
-function resolveApiBaseURL() {
-  if (process.env.NEXT_PUBLIC_AUTH_BASE_URL) {
-    return process.env.NEXT_PUBLIC_AUTH_BASE_URL
-  }
-
-  if (typeof window !== "undefined") {
-    return `${window.location.protocol}//${window.location.hostname}:4000`
-  }
-
-  if (process.env.BETTER_AUTH_URL) {
-    return process.env.BETTER_AUTH_URL
-  }
-
-  return "http://localhost:4000"
-}
-
 async function parseJSON<T>(response: Response): Promise<T> {
   return (await response.json()) as T
 }
 
 export async function getOrders(): Promise<OrdersListResponse> {
-  const response = await fetch("/api/orders", {
-    method: "GET",
-    cache: "no-store",
-  })
-
-  if (!response.ok) {
-    throw new Error("Failed to fetch orders")
-  }
-
-  return parseJSON<OrdersListResponse>(response)
+  const items: OrdersListItem[] = []
+  let cursor: string | null = null
+  do {
+    const query: string = cursor ? `?limit=100&cursor=${encodeURIComponent(cursor)}` : '?limit=100'
+    const response: Response = await fetch(`${apiBaseURL()}/orders${query}`, {
+      cache: 'no-store', credentials: 'include',
+    })
+    if (!response.ok) throw new Error('Failed to fetch orders')
+    const page: OrdersListResponse & { nextCursor?: string | null } = await parseJSON(response)
+    items.push(...page.items)
+    if (page.nextCursor && page.nextCursor === cursor) throw new Error('Order pagination did not advance')
+    cursor = page.nextCursor ?? null
+  } while (cursor)
+  return { items, count: items.length }
 }
 
 export async function getOrderById(id: string): Promise<OrderDetail> {
-  const response = await fetch(`/api/orders/${id}`, {
+  const response = await fetch(`${apiBaseURL()}/orders/${encodeURIComponent(id)}`, {
     method: "GET",
     cache: "no-store",
+    credentials: 'include',
   })
 
   if (response.status === 404) {
@@ -130,7 +130,7 @@ export function getOrderStatusVariant(status: string): "default" | "secondary" |
 
 // Admin API
 export async function adminListOrders(): Promise<OrdersListResponse> {
-  const response = await fetch(`${resolveApiBaseURL()}/admin/orders`, {
+  const response = await adminFetch('orders', {
     method: "GET",
     cache: "no-store",
   })
@@ -143,14 +143,15 @@ export async function adminListOrders(): Promise<OrdersListResponse> {
 }
 
 export async function adminUpdateOrderStatus(orderId: string, status: string) {
-  const response = await fetch(`${resolveApiBaseURL()}/admin/orders/${orderId}/status`, {
+  const response = await adminFetch(`orders/${encodeURIComponent(orderId)}/status`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status }),
   })
 
   if (!response.ok) {
-    throw new Error("Failed to update order status")
+    const body = await response.json().catch(() => null)
+    throw new Error(body?.message ?? 'Failed to update order status')
   }
 
   return parseJSON<{ id: string; status: string }>(response)
@@ -170,7 +171,7 @@ export async function adminUpdateProduct(
     stock?: number
   },
 ) {
-  const response = await fetch(`${resolveApiBaseURL()}/admin/products/${productId}`, {
+  const response = await adminFetch(`products/${encodeURIComponent(productId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -206,7 +207,7 @@ export type AdminProduct = {
 }
 
 export async function adminGetProduct(productId: string): Promise<AdminProduct> {
-  const response = await fetch(`${resolveApiBaseURL()}/admin/products/${productId}`, {
+  const response = await adminFetch(`products/${encodeURIComponent(productId)}`, {
     method: "GET",
     cache: "no-store",
   })
@@ -219,7 +220,7 @@ export async function adminGetProduct(productId: string): Promise<AdminProduct> 
 }
 
 export async function adminListCategories(): Promise<AdminCategory[]> {
-  const response = await fetch(`${resolveApiBaseURL()}/admin/products/categories`, {
+  const response = await adminFetch('products/categories', {
     method: "GET",
     cache: "no-store",
   })
@@ -243,7 +244,7 @@ export async function adminCreateProduct(data: {
   isActive?: boolean
   categoryId: string
 }) {
-  const response = await fetch(`${resolveApiBaseURL()}/admin/products`, {
+  const response = await adminFetch('products', {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -258,7 +259,7 @@ export async function adminCreateProduct(data: {
 }
 
 export async function adminDeleteProduct(productId: string) {
-  const response = await fetch(`${resolveApiBaseURL()}/admin/products/${productId}`, {
+  const response = await adminFetch(`products/${encodeURIComponent(productId)}`, {
     method: "DELETE",
   })
 
@@ -270,7 +271,7 @@ export async function adminDeleteProduct(productId: string) {
 }
 
 export async function adminGetOrderById(orderId: string): Promise<OrderDetail> {
-  const response = await fetch(`${resolveApiBaseURL()}/admin/orders/${orderId}`, {
+  const response = await adminFetch(`orders/${encodeURIComponent(orderId)}`, {
     method: "GET",
     cache: "no-store",
   })

@@ -2,6 +2,9 @@ import { BadRequestException } from "@nestjs/common"
 
 import { CheckoutService } from "./checkout.service"
 import { prisma } from "../prisma"
+import { PaymentsService } from '../payments/payments.service'
+
+const paymentsService = { verifySuccessfulIntent: jest.fn().mockResolvedValue(undefined) } as unknown as PaymentsService
 
 jest.mock("../prisma", () => ({
   prisma: {
@@ -80,8 +83,9 @@ describe("CheckoutService", () => {
       ],
     })
 
-    const txCartUpdate = jest.fn().mockResolvedValue({})
+    const txCartUpdate = jest.fn().mockResolvedValue({ count: 1 })
     const txCartCreate = jest.fn().mockResolvedValue({ id: "cart-2" })
+    const txProductUpdate = jest.fn().mockResolvedValue({ count: 1 })
 
     mockedPrisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
       const tx = {
@@ -89,21 +93,22 @@ describe("CheckoutService", () => {
           create: txOrderCreate,
         },
         cart: {
-          update: txCartUpdate,
+          updateMany: txCartUpdate,
           create: txCartCreate,
         },
+        product: { updateMany: txProductUpdate },
       }
 
       return fn(tx)
     })
 
-    return { txOrderCreate, txCartCreate }
+    return { txOrderCreate, txCartCreate, txCartUpdate, txProductUpdate }
   }
 
   it("creates a fresh active cart after converting cart to order", async () => {
-    const service = new CheckoutService()
+    const service = new CheckoutService(paymentsService)
     setupActiveCart()
-    const { txOrderCreate, txCartCreate } = setupTransactionMocks()
+    const { txOrderCreate, txCartCreate, txCartUpdate, txProductUpdate } = setupTransactionMocks()
 
     await service.createPendingOrder(
       { userId: "user-1", guestId: "guest-1" },
@@ -125,6 +130,14 @@ describe("CheckoutService", () => {
       })
     )
 
+    expect(txProductUpdate).toHaveBeenCalledWith({
+      where: { id: 'prod-1', isActive: true, stock: { gte: 2 }, priceInCents: 10000 },
+      data: { stock: { decrement: 2 } },
+    })
+    expect(txCartUpdate).toHaveBeenCalledWith({
+      where: { id: 'cart-1', status: 'active' },
+      data: { status: 'converted' },
+    })
     expect(txCartCreate).toHaveBeenCalledWith({
       data: {
         userId: "user-1",
@@ -134,8 +147,20 @@ describe("CheckoutService", () => {
     })
   })
 
+  it('rejects concurrent checkout when the cart has already converted', async () => {
+    const service = new CheckoutService(paymentsService)
+    setupActiveCart()
+    const { txCartUpdate, txOrderCreate } = setupTransactionMocks()
+    txCartUpdate.mockResolvedValue({ count: 0 })
+    await expect(service.createPendingOrder(
+      { userId: 'user-1', guestId: 'guest-1' },
+      { customerEmail: 'buyer@example.com', customerName: 'Buyer', shippingAddressLine1: '123 Main', city: 'City', province: 'Province', postalCode: '1100' }
+    )).rejects.toBeInstanceOf(BadRequestException)
+    expect(txOrderCreate).not.toHaveBeenCalled()
+  })
+
   it("requires paymentIntentId for card payments", async () => {
-    const service = new CheckoutService()
+    const service = new CheckoutService(paymentsService)
     setupActiveCart()
 
     await expect(
@@ -155,7 +180,7 @@ describe("CheckoutService", () => {
   })
 
   it("stores payment intent id in dedicated order field for card payments", async () => {
-    const service = new CheckoutService()
+    const service = new CheckoutService(paymentsService)
     setupActiveCart()
     const { txOrderCreate } = setupTransactionMocks()
 
@@ -173,9 +198,11 @@ describe("CheckoutService", () => {
       }
     )
 
+    expect(paymentsService.verifySuccessfulIntent).toHaveBeenCalledWith('pi_mock_123', 21000, 'cart-1')
     expect(txOrderCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
+          status: 'CONFIRMED',
           paymentIntentId: "pi_mock_123",
           notes: expect.stringContaining("Payment method: Card"),
         }),

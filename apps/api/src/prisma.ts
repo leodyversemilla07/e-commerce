@@ -1,14 +1,17 @@
 import 'dotenv/config';
 
+import { resolve } from 'node:path';
+import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { parseApiEnv } from '@workspace/env/api';
 import { PrismaClient } from './generated/prisma/client';
 
-const connectionString = process.env.DATABASE_URL;
+export const apiEnv = parseApiEnv(process.env);
+const sqlite = apiEnv.DB_PROVIDER === 'sqlite';
 
-if (!connectionString) {
-  throw new Error('DATABASE_URL is not set');
-}
-
-const adapter = new PrismaPg({ connectionString });
+// Both the SQLite CLI config and runtime adapter resolve file: URLs from apps/api.
+const adapter = sqlite
+  ? new PrismaBetterSqlite3({ url: resolve(process.cwd(), apiEnv.DATABASE_URL.slice(5)) })
+  : new PrismaPg({ connectionString: apiEnv.DATABASE_URL });
 
 export const prisma = new PrismaClient({ adapter });

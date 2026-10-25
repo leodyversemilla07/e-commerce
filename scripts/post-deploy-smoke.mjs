@@ -1,6 +1,7 @@
 const webBase = process.env.WEB_BASE_URL || "http://127.0.0.1:3000";
 const apiBase = process.env.API_BASE_URL || "http://127.0.0.1:4000";
-const adminPassword = process.env.ADMIN_PASSWORD || "admin123";
+const adminPassword = process.env.ADMIN_PASSWORD;
+if (!adminPassword) throw new Error('Set ADMIN_PASSWORD to run the admin login smoke check');
 
 function log(...args) {
   console.log("[smoke]", ...args);
@@ -81,13 +82,17 @@ async function checkAdminAuthEndpoint() {
   expect(good.body?.success === true, "Admin auth response indicates success", good.body);
 }
 
-async function checkOrdersProxy() {
-  const orders = await assertFetch(`${webBase}/api/orders`, { method: "GET" });
-  expect(
-    orders.status === 200 || orders.status === 401,
-    "Web /api/orders returns 200 (guest/fallback) or 401 (strict auth)",
-    orders,
-  );
+async function checkGuestOrders() {
+  const orders = await assertFetch(`${apiBase}/orders`, { method: "GET" });
+  expect(orders.status === 200, "API /orders returns 200 for a guest", orders);
+  expect(Array.isArray(orders.body?.items), "API /orders returns an items array", orders.body);
+}
+
+async function checkAdminApiProtection() {
+  const products = await assertFetch(`${apiBase}/admin/products`, { method: "GET" });
+  expect(products.status === 401, "API /admin/products denies anonymous requests", products);
+  const analytics = await assertFetch(`${webBase}/api/admin/analytics/overview`, { method: "GET" });
+  expect(analytics.status === 401, "Web analytics denies anonymous requests", analytics);
 }
 
 async function main() {
@@ -98,7 +103,8 @@ async function main() {
   await checkCatalog();
   await checkWebRoutes();
   await checkAdminAuthEndpoint();
-  await checkOrdersProxy();
+  await checkGuestOrders();
+  await checkAdminApiProtection();
 
   log("All post-deploy smoke checks passed.");
 }

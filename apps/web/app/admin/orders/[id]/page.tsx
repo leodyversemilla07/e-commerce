@@ -39,7 +39,7 @@ export default async function AdminOrderDetailPage({ params }: AdminOrderDetailP
           <Badge variant={getOrderStatusVariant(order.status)}>
             {formatOrderStatus(order.status)}
           </Badge>
-          <AdminStatusUpdater orderId={order.id} currentStatus={order.status} />
+          <AdminStatusUpdater orderId={order.id} currentStatus={order.status} hasCardPayment={order.hasCardPayment} />
         </div>
       </div>
 

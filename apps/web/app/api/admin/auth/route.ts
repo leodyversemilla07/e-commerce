@@ -1,6 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123"
+import { createAdminSession } from '@/lib/admin-session'
+
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null)
@@ -10,11 +12,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Password is required" }, { status: 400 })
   }
 
-  if (password !== ADMIN_PASSWORD) {
+  if (!ADMIN_PASSWORD || ADMIN_PASSWORD.length < 32 || password !== ADMIN_PASSWORD) {
     return NextResponse.json({ error: "Invalid password" }, { status: 401 })
   }
 
-  const token = Buffer.from(ADMIN_PASSWORD).toString("base64")
+  const token = createAdminSession()
 
   const response = NextResponse.json({ success: true })
   response.cookies.set("admin_token", token, {

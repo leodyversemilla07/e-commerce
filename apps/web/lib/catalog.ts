@@ -48,16 +48,18 @@ export function getProductImageUrl(product: ProductListItem): string {
 }
 
 export async function getProducts(): Promise<ProductListItem[]> {
-  const response = await fetch(`${resolveApiBaseURL()}/products`, {
-    cache: "no-store",
-  })
-
-  if (!response.ok) {
-    throw new Error("Failed to fetch products")
-  }
-
-  const payload = (await response.json()) as { items?: ProductListItem[] }
-  return payload.items ?? []
+  const products: ProductListItem[] = []
+  let cursor: string | null = null
+  do {
+    const query: string = cursor ? `?limit=200&cursor=${encodeURIComponent(cursor)}` : '?limit=200'
+    const response: Response = await fetch(`${resolveApiBaseURL()}/products${query}`, { cache: 'no-store' })
+    if (!response.ok) throw new Error('Failed to fetch products')
+    const payload: { items: ProductListItem[]; nextCursor: string | null } = await response.json()
+    products.push(...payload.items)
+    if (payload.nextCursor && payload.nextCursor === cursor) throw new Error('Catalog pagination did not advance')
+    cursor = payload.nextCursor
+  } while (cursor)
+  return products
 }
 
 export async function getProductBySlug(slug: string): Promise<ProductDetail | null> {

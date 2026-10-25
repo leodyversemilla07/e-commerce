@@ -1,7 +1,14 @@
 import { BadRequestException, Injectable } from "@nestjs/common"
+import { PaymentsService } from '../payments/payments.service'
 
 import { prisma } from "../prisma"
 import type { CheckoutPayload, CheckoutRequestIdentity } from "./checkout.types"
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[char] ?? char)
+}
 
 type OrderItem = {
   quantity: number
@@ -36,7 +43,7 @@ async function sendOrderConfirmationEmail(order: {
     .map(
       (item) =>
         `<tr>
-          <td style="padding:8px 0;border-bottom:1px solid #f0f0f0">${item.product.name}</td>
+          <td style="padding:8px 0;border-bottom:1px solid #f0f0f0">${escapeHtml(item.product.name)}</td>
           <td style="padding:8px 0;border-bottom:1px solid #f0f0f0;text-align:center">${item.quantity}</td>
           <td style="padding:8px 0;border-bottom:1px solid #f0f0f0;text-align:right">${formatPrice(item.lineTotalInCents)}</td>
         </tr>`
@@ -45,8 +52,8 @@ async function sendOrderConfirmationEmail(order: {
 
   const html = `
     <div style="font-family:sans-serif;max-width:600px;margin:0 auto;color:#111">
-      <h2 style="color:#111">Order Confirmed 🎉</h2>
-      <p>Hi ${order.customerName}, thank you for your order!</p>
+      <h2 style="color:#111">Order received 🎉</h2>
+      <p>Hi ${escapeHtml(order.customerName)}, thank you for your order!</p>
       <p style="color:#666;font-size:13px">Order ID: <strong>${order.id}</strong></p>
 
       <table style="width:100%;border-collapse:collapse;margin:16px 0">
@@ -85,7 +92,7 @@ async function sendOrderConfirmationEmail(order: {
     body: JSON.stringify({
       from,
       to: [order.customerEmail],
-      subject: `Order confirmed — #${order.id.slice(0, 8).toUpperCase()}`,
+      subject: `Order received — #${order.id.slice(0, 8).toUpperCase()}`,
       html,
     }),
   })
@@ -96,8 +103,8 @@ async function sendOrderConfirmationEmail(order: {
   }
 }
 
-function normalize(value: string | null | undefined) {
-  return value?.trim() ?? ""
+function normalize(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 function getShippingFeeInCents(method: "standard" | "express") {
@@ -112,6 +119,8 @@ function getDeliveryOptionLabel(option: "anytime" | "morning" | "afternoon") {
 
 @Injectable()
 export class CheckoutService {
+  constructor(private readonly paymentsService: PaymentsService) {}
+
   private async getActiveCart(identity: CheckoutRequestIdentity) {
     const cart = await prisma.cart.findFirst({
       where: {
@@ -177,7 +186,7 @@ export class CheckoutService {
     }
 
     const subtotalInCents = cart.items.reduce(
-      (sum, item) => sum + item.unitPriceInCents * item.quantity,
+      (sum, item) => sum + item.product.priceInCents * item.quantity,
       0
     )
 
@@ -192,16 +201,38 @@ export class CheckoutService {
     if (paymentMethod === "card" && !paymentIntentId) {
       throw new BadRequestException("paymentIntentId is required for card payments")
     }
+    if (paymentMethod === 'cod' && paymentIntentId) {
+      throw new BadRequestException('Cash-on-delivery orders cannot include a payment intent')
+    }
     const shippingFeeInCents = getShippingFeeInCents(shippingMethod)
     const taxInCents = Math.round(subtotalInCents * 0.05)
     const totalInCents = subtotalInCents + shippingFeeInCents + taxInCents
 
+    if (paymentIntentId) {
+      await this.paymentsService.verifySuccessfulIntent(paymentIntentId, totalInCents, cart.id)
+    }
+
     const order = await prisma.$transaction(async (tx) => {
+      // Only one checkout can convert this cart. Stock updates and the order must commit together.
+      const claim = await tx.cart.updateMany({
+        where: { id: cart.id, status: 'active' },
+        data: { status: 'converted' },
+      })
+      if (claim.count !== 1) throw new BadRequestException('Cart has already been checked out')
+
+      for (const item of cart.items) {
+        const reserved = await tx.product.updateMany({
+          where: { id: item.productId, isActive: true, stock: { gte: item.quantity }, priceInCents: item.product.priceInCents },
+          data: { stock: { decrement: item.quantity } },
+        })
+        if (reserved.count !== 1) throw new BadRequestException('Product availability or price changed; refresh your cart')
+      }
+
       const createdOrder = await tx.order.create({
         data: {
           userId: identity.userId,
           guestId: identity.guestId,
-          status: "PENDING",
+          status: paymentIntentId ? 'CONFIRMED' : 'PENDING',
           customerEmail: normalize(payload.customerEmail),
           customerName: normalize(payload.customerName),
           shippingAddressLine1: normalize(payload.shippingAddressLine1),
@@ -227,8 +258,8 @@ export class CheckoutService {
             create: cart.items.map((item) => ({
               productId: item.productId,
               quantity: item.quantity,
-              unitPriceInCents: item.unitPriceInCents,
-              lineTotalInCents: item.unitPriceInCents * item.quantity,
+              unitPriceInCents: item.product.priceInCents,
+              lineTotalInCents: item.product.priceInCents * item.quantity,
             })),
           },
         },
@@ -246,13 +277,6 @@ export class CheckoutService {
               },
             },
           },
-        },
-      })
-
-      await tx.cart.update({
-        where: { id: cart.id },
-        data: {
-          status: "converted",
         },
       })
 

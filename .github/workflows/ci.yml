@@ -25,6 +25,14 @@ jobs:
           --health-retries 5
     env:
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/ecommerce_ci
+      # Deterministic non-production values for the env validation added to API/web.
+      BETTER_AUTH_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef
+      BETTER_AUTH_URL: http://127.0.0.1:4000
+      BETTER_AUTH_TRUSTED_ORIGINS: http://127.0.0.1:3000,http://localhost:3000
+      NEXT_PUBLIC_AUTH_BASE_URL: http://127.0.0.1:4000
+      ADMIN_API_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789
+      ADMIN_PASSWORD: fedcba9876543210fedcba9876543210fedcba9876543210
+      PAYMENT_PROVIDER: mock
 
     steps:
       - name: Checkout
@@ -39,7 +47,7 @@ jobs:
       - name: Enable pnpm
         run: |
           corepack enable
-          corepack prepare pnpm@10.33.2 --activate
+          corepack prepare pnpm@12.7.0 --activate
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -67,15 +75,11 @@ jobs:
 
       - name: Start API
         run: pnpm --dir apps/api run start:prod > api.log 2>&1 &
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/ecommerce_ci
         shell: bash
         timeout-minutes: 3
 
       - name: Start Web
         run: pnpm --dir apps/web run start:prod > web.log 2>&1 &
-        env:
-          NEXT_PUBLIC_AUTH_BASE_URL: http://127.0.0.1:4000
         shell: bash
         timeout-minutes: 3
 
@@ -97,7 +101,6 @@ jobs:
           WEB_BASE_URL: http://127.0.0.1:3000
           API_BASE_URL: http://127.0.0.1:4000
           BASE_URL: http://127.0.0.1:4000
-          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
         run: |
           pnpm run smoke:postdeploy
           pnpm run smoke:payments

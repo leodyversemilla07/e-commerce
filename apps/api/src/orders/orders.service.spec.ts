@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 
 import { prisma } from '../prisma';
 import { OrdersService } from './orders.service';
@@ -9,8 +9,10 @@ jest.mock('../prisma', () => ({
       findMany: jest.fn(),
       findFirst: jest.fn(),
       findUnique: jest.fn(),
-      update: jest.fn(),
+      updateMany: jest.fn(),
     },
+    product: { update: jest.fn() },
+    $transaction: jest.fn(),
   },
 }));
 
@@ -19,8 +21,10 @@ const mockedPrisma = prisma as unknown as {
     findMany: jest.Mock;
     findFirst: jest.Mock;
     findUnique: jest.Mock;
-    update: jest.Mock;
+    updateMany: jest.Mock;
   };
+  product: { update: jest.Mock };
+  $transaction: jest.Mock;
 };
 
 function makeOrder(overrides: Partial<Record<string, unknown>> = {}) {
@@ -63,6 +67,8 @@ describe('OrdersService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedPrisma.$transaction.mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn({ order: mockedPrisma.order, product: mockedPrisma.product }));
+    mockedPrisma.order.updateMany.mockResolvedValue({ count: 1 });
   });
 
   // ─── listOrders ────────────────────────────────────────────────────────────
@@ -154,18 +160,41 @@ describe('OrdersService', () => {
   describe('updateOrderStatus', () => {
     it('updates and returns the order status', async () => {
       mockedPrisma.order.findUnique.mockResolvedValue(makeOrder());
-      mockedPrisma.order.update.mockResolvedValue(makeOrder({ status: 'CONFIRMED' }));
 
       const service = new OrdersService();
       const result = await service.updateOrderStatus('order-1', 'CONFIRMED');
 
       expect(result.status).toBe('CONFIRMED');
-      expect(mockedPrisma.order.update).toHaveBeenCalledWith(
+      expect(mockedPrisma.order.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'order-1' },
+          where: { id: 'order-1', status: 'PENDING' },
           data: { status: 'CONFIRMED' },
         }),
       );
+    });
+
+    it('restores inventory when cancelling an order once', async () => {
+      mockedPrisma.order.findUnique.mockResolvedValue(makeOrder());
+      const service = new OrdersService();
+      await service.updateOrderStatus('order-1', 'CANCELLED');
+      expect(mockedPrisma.product.update).toHaveBeenCalledWith({
+        where: { id: 'prod-1' }, data: { stock: { increment: 2 } },
+      });
+    });
+
+    it('does not cancel a paid order without a refund', async () => {
+      mockedPrisma.order.findUnique.mockResolvedValue(makeOrder({ status: 'CONFIRMED', paymentIntentId: 'pi_paid' }));
+      await expect(new OrdersService().updateOrderStatus('order-1', 'CANCELLED'))
+        .rejects.toBeInstanceOf(BadRequestException);
+      expect(mockedPrisma.order.updateMany).not.toHaveBeenCalled();
+      expect(mockedPrisma.product.update).not.toHaveBeenCalled();
+    });
+
+    it('does not restock shipped or delivered orders via cancellation', async () => {
+      mockedPrisma.order.findUnique.mockResolvedValue(makeOrder({ status: 'SHIPPED' }));
+      await expect(new OrdersService().updateOrderStatus('order-1', 'CANCELLED'))
+        .rejects.toBeInstanceOf(BadRequestException);
+      expect(mockedPrisma.product.update).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException when order to update does not exist', async () => {
