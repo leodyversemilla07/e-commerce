@@ -8,7 +8,10 @@ jest.mock("../prisma", () => ({
     cart: { findUnique: jest.fn() },
     order: {
       updateMany: jest.fn(),
+      findUnique: jest.fn(),
     },
+    product: { update: jest.fn() },
+    $transaction: jest.fn(),
     paymentWebhookEvent: {
       findUnique: jest.fn(),
       create: jest.fn(),
@@ -23,7 +26,10 @@ describe("PaymentsService", () => {
     cart: { findUnique: jest.Mock }
     order: {
       updateMany: jest.Mock
+      findUnique: jest.Mock
     }
+    product: { update: jest.Mock }
+    $transaction: jest.Mock
     paymentWebhookEvent: {
       findUnique: jest.Mock
       create: jest.Mock
@@ -38,6 +44,7 @@ describe("PaymentsService", () => {
     process.env.STRIPE_WEBHOOK_SECRET = undefined
     jest.clearAllMocks()
     mockedPrisma.order.updateMany.mockResolvedValue({ count: 1 })
+    mockedPrisma.order.findUnique.mockResolvedValue(null)
     mockedPrisma.paymentWebhookEvent.findUnique.mockResolvedValue(null)
     mockedPrisma.paymentWebhookEvent.create.mockResolvedValue({ id: "evt_row_1" })
     mockedPrisma.paymentWebhookEvent.updateMany.mockResolvedValue({ count: 1 })
@@ -274,5 +281,118 @@ describe("PaymentsService", () => {
     expect(mockedPrisma.paymentWebhookEvent.findUnique).not.toHaveBeenCalled()
     expect(mockedPrisma.paymentWebhookEvent.create).not.toHaveBeenCalled()
     expect(mockedPrisma.paymentWebhookEvent.updateMany).not.toHaveBeenCalled()
+  })
+
+  function stripeProvider() {
+    return new StripePaymentProvider("sk_test", "whsec_test") as unknown as {
+      processWebhookEvent: (event: {
+        id: string
+        type: string
+        data?: { object?: { id?: string; metadata?: Record<string, string> } }
+      }) => Promise<boolean>
+    }
+  }
+
+  it("confirms a pending order for a succeeded payment", async () => {
+    const processed = await stripeProvider().processWebhookEvent({
+      id: "evt_1",
+      type: "payment_intent.succeeded",
+      data: { object: { id: "pi_1", metadata: { source: "e-commerce-checkout" } } },
+    })
+
+    expect(processed).toBe(true)
+    expect(mockedPrisma.order.updateMany).toHaveBeenCalledWith({
+      where: { paymentIntentId: "pi_1", status: "PENDING" },
+      data: { status: "CONFIRMED" },
+    })
+  })
+
+  it("acknowledges a duplicate success only when the order is already confirmed", async () => {
+    mockedPrisma.order.updateMany.mockResolvedValue({ count: 0 })
+    mockedPrisma.order.findUnique.mockResolvedValue({ status: "CONFIRMED" })
+
+    const processed = await stripeProvider().processWebhookEvent({
+      id: "evt_1",
+      type: "payment_intent.succeeded",
+      data: { object: { id: "pi_1", metadata: { source: "e-commerce-checkout" } } },
+    })
+
+    expect(processed).toBe(true)
+  })
+
+  it("asks the provider to retry a succeeded event whose order is not committed yet", async () => {
+    mockedPrisma.order.updateMany.mockResolvedValue({ count: 0 })
+    mockedPrisma.order.findUnique.mockResolvedValue(null)
+
+    await expect(
+      stripeProvider().processWebhookEvent({
+        id: "evt_1",
+        type: "payment_intent.succeeded",
+        data: { object: { id: "pi_1", metadata: { source: "e-commerce-checkout" } } },
+      })
+    ).rejects.toBeInstanceOf(ServiceUnavailableException)
+  })
+
+  it("acknowledges an unrelated success without requiring a local order", async () => {
+    mockedPrisma.order.updateMany.mockResolvedValue({ count: 0 })
+    mockedPrisma.order.findUnique.mockResolvedValue(null)
+
+    const processed = await stripeProvider().processWebhookEvent({
+      id: "evt_1",
+      type: "payment_intent.succeeded",
+      data: { object: { id: "pi_1" } },
+    })
+
+    expect(processed).toBe(false)
+  })
+
+  it("cancels a pending order and restores stock when its payment intent is canceled", async () => {
+    const txOrderUpdateMany = jest.fn().mockResolvedValue({ count: 1 })
+    const txProductUpdate = jest.fn().mockResolvedValue({})
+    mockedPrisma.order.findUnique.mockResolvedValue({
+      id: "order-1",
+      status: "PENDING",
+      items: [{ productId: "prod-1", quantity: 2 }],
+    })
+    mockedPrisma.$transaction.mockImplementation(
+      async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn({
+          order: { updateMany: txOrderUpdateMany },
+          product: { update: txProductUpdate },
+        })
+    )
+
+    const processed = await stripeProvider().processWebhookEvent({
+      id: "evt_2",
+      type: "payment_intent.canceled",
+      data: { object: { id: "pi_1" } },
+    })
+
+    expect(processed).toBe(true)
+    expect(txOrderUpdateMany).toHaveBeenCalledWith({
+      where: { id: "order-1", status: "PENDING" },
+      data: { status: "CANCELLED" },
+    })
+    expect(txProductUpdate).toHaveBeenCalledWith({
+      where: { id: "prod-1" },
+      data: { stock: { increment: 2 } },
+    })
+  })
+
+  it("does not cancel or restock a confirmed order when its intent is canceled", async () => {
+    mockedPrisma.order.findUnique.mockResolvedValue({
+      id: "order-1",
+      status: "CONFIRMED",
+      items: [],
+    })
+
+    const processed = await stripeProvider().processWebhookEvent({
+      id: "evt_2",
+      type: "payment_intent.canceled",
+      data: { object: { id: "pi_1" } },
+    })
+
+    expect(processed).toBe(false)
+    expect(mockedPrisma.$transaction).not.toHaveBeenCalled()
   })
 })

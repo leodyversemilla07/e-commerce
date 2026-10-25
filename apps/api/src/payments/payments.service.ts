@@ -30,6 +30,7 @@ type StripeWebhookEvent = {
   data?: {
     object?: {
       id?: string
+      metadata?: Record<string, string>
     }
   }
 }
@@ -317,6 +318,78 @@ export class StripePaymentProvider implements PaymentProvider {
     })
   }
 
+  private async processWebhookEvent(event: StripeWebhookEvent): Promise<boolean> {
+    if (event.type === "payment_intent.succeeded") {
+      const paymentIntentId = event.data?.object?.id
+      if (!paymentIntentId) return false
+
+      const updated = await prisma.order.updateMany({
+        where: { paymentIntentId, status: "PENDING" },
+        data: { status: "CONFIRMED" },
+      })
+      if (updated.count > 0) return true
+
+      const existing = await prisma.order.findUnique({
+        where: { paymentIntentId },
+        select: { status: true },
+      })
+      if (existing?.status === "CONFIRMED") return true
+      if (existing?.status === "CANCELLED") {
+        // The payment captured after the order was cancelled. Retrying cannot
+        // fix this; it needs an operator-visible refund.
+        console.error(
+          `[payments] succeeded payment for cancelled order intent ${paymentIntentId}; refund required`
+        )
+        return false
+      }
+
+      if (event.data?.object?.metadata?.source === "e-commerce-checkout") {
+        // Checkout may still be committing the order. Do not acknowledge the
+        // event; let the provider redeliver it after the order exists.
+        throw new ServiceUnavailableException(
+          "Order not found for payment intent; retry webhook"
+        )
+      }
+
+      return false
+    }
+
+    if (event.type === "payment_intent.canceled") {
+      const paymentIntentId = event.data?.object?.id
+      if (!paymentIntentId) return false
+      return this.cancelPendingOrderForIntent(paymentIntentId)
+    }
+
+    return false
+  }
+
+  private async cancelPendingOrderForIntent(paymentIntentId: string): Promise<boolean> {
+    const order = await prisma.order.findUnique({
+      where: { paymentIntentId },
+      include: { items: { select: { productId: true, quantity: true } } },
+    })
+    if (!order) return false
+    if (order.status === "CANCELLED") return true
+    if (order.status !== "PENDING") return false
+
+    return prisma.$transaction(async (tx) => {
+      const cancelled = await tx.order.updateMany({
+        where: { id: order.id, status: "PENDING" },
+        data: { status: "CANCELLED" },
+      })
+      if (cancelled.count !== 1) return false
+
+      for (const item of order.items) {
+        await tx.product.update({
+          where: { id: item.productId },
+          data: { stock: { increment: item.quantity } },
+        })
+      }
+
+      return true
+    })
+  }
+
   async handleWebhook(signature: string, rawBody: Buffer): Promise<PaymentWebhookResult> {
     const Stripe = await this.loadStripe()
     const stripe = new Stripe(this.secretKey)
@@ -333,36 +406,14 @@ export class StripePaymentProvider implements PaymentProvider {
     }
 
     try {
-      if (event.type === "payment_intent.succeeded") {
-        const paymentIntentId = event.data?.object?.id
-
-        if (paymentIntentId) {
-          await prisma.order.updateMany({
-            where: {
-              status: "PENDING",
-              paymentIntentId,
-            },
-            data: {
-              status: "CONFIRMED",
-            },
-          })
-
-          await this.markWebhookProcessed(event.id, claim.claimedAt)
-
-          return {
-            received: true,
-            eventType: event.type,
-            processed: true,
-          }
-        }
-      }
+      const processed = await this.processWebhookEvent(event)
 
       await this.markWebhookProcessed(event.id, claim.claimedAt)
 
       return {
         received: true,
         eventType: event.type,
-        processed: false,
+        processed,
       }
     } catch (error) {
       await this.releaseWebhookClaim(event.id, claim.claimedAt)
@@ -490,8 +541,18 @@ export class PaymentsService {
     })
   }
 
+  async getIntent(paymentIntentId: string): Promise<PaymentIntentResponse> {
+    const normalizedPaymentIntentId = paymentIntentId.trim()
+
+    if (!normalizedPaymentIntentId) {
+      throw new BadRequestException("paymentIntentId is required")
+    }
+
+    return this.resolveProvider().getIntent(normalizedPaymentIntentId)
+  }
+
   async verifySuccessfulIntent(paymentIntentId: string, expectedAmount: number, cartId?: string): Promise<void> {
-    const intent = await this.resolveProvider().getIntent(paymentIntentId)
+    const intent = await this.getIntent(paymentIntentId)
     if (intent.status !== 'succeeded' || intent.amountInCents !== expectedAmount || intent.currency !== 'PHP' ||
         (cartId !== undefined && intent.cartId !== cartId)) {
       throw new BadRequestException('Payment is not completed for this order total')
