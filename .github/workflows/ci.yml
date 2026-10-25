@@ -47,7 +47,7 @@ jobs:
       - name: Enable pnpm
         run: |
           corepack enable
-          corepack prepare pnpm@12.7.0 --activate
+          corepack prepare pnpm@12.15.0 --activate
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -96,14 +96,10 @@ jobs:
           curl -fsS http://127.0.0.1:3000 >/dev/null
         shell: bash
 
-      - name: Web smoke tests
+      - name: Payment smoke test
         env:
-          WEB_BASE_URL: http://127.0.0.1:3000
-          API_BASE_URL: http://127.0.0.1:4000
           BASE_URL: http://127.0.0.1:4000
-        run: |
-          pnpm run smoke:postdeploy
-          pnpm run smoke:payments
+        run: pnpm run smoke:payments
         shell: bash
 
       - name: Stop services

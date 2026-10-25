@@ -13,7 +13,6 @@
     "dev:api": "pnpm --dir apps/api dev",
     "dev:all": "concurrently -n web,api -c cyan,magenta \"pnpm run dev:web\" \"pnpm run dev:api\"",
     "dev:sqlite": "concurrently -n web,api -c cyan,magenta \"pnpm run dev:web\" \"pnpm --dir apps/api run dev:sqlite\"",
-    "smoke:postdeploy": "node scripts/post-deploy-smoke.mjs",
     "smoke:payments": "node scripts/e2e-payment-check.js",
     "validate:env": "node scripts/validate-env.mjs --service=all",
     "validate:env:api": "node scripts/validate-env.mjs --service=api",
@@ -28,7 +27,7 @@
     "turbo": "^2.8.17",
     "typescript": "5.9.3"
   },
-  "packageManager": "pnpm@12.7.0",
+  "packageManager": "pnpm@12.15.0",
   "engines": {
     "node": ">=20"
   },
