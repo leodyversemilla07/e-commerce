@@ -119,8 +119,13 @@ async function main() {
     const order = await call('/checkout/create-order', { method: 'POST', headers, body: JSON.stringify(payload) }, 201)
     assert.equal(order.body.status, 'CONFIRMED')
     assert.equal(order.body.totalInCents, total)
+
+    const retriedOrder = await call('/checkout/create-order', { method: 'POST', headers, body: JSON.stringify(payload) }, 201)
+    assert.equal(retriedOrder.body.id, order.body.id, 'Retried checkout must return the same order')
+    assert.equal(retriedOrder.body.status, 'CONFIRMED')
+
     const catalogAfter = await call(`/products/${product.slug}`)
-    assert.equal(catalogAfter.body.stock, product.stock - 1)
+    assert.equal(catalogAfter.body.stock, product.stock - 1, 'Retried checkout must not reserve stock twice')
     const history = await call('/orders', { headers })
     assert.ok(history.body.items.some((item) => item.id === order.body.id))
     await call(`/orders/${order.body.id}`, {}, 404)
@@ -168,7 +173,7 @@ async function main() {
     const otherCart = await call('/cart', { headers: otherHeaders })
     assert.equal(otherCart.body.itemCount, 0, 'Previous account cart leaked to another account')
 
-    console.log('SQLite HTTP integration passed: sessions, admin guard, cart, payment, checkout, cancellation, stock, ownership and guest isolation')
+    console.log('SQLite HTTP integration passed: sessions, admin guard, cart, payment, idempotent checkout, cancellation, stock, ownership and guest isolation')
   } finally {
     if (server) {
       server.kill()

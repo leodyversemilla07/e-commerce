@@ -4,12 +4,20 @@ import { CheckoutService } from "./checkout.service"
 import { prisma } from "../prisma"
 import { PaymentsService } from '../payments/payments.service'
 
-const paymentsService = { verifySuccessfulIntent: jest.fn().mockResolvedValue(undefined) } as unknown as PaymentsService
+const paymentsService = {
+  getIntent: jest.fn(),
+  verifySuccessfulIntent: jest.fn().mockResolvedValue(undefined),
+} as unknown as PaymentsService
 
 jest.mock("../prisma", () => ({
   prisma: {
     cart: {
       findFirst: jest.fn(),
+    },
+    order: {
+      findFirst: jest.fn(),
+      findUnique: jest.fn(),
+      updateMany: jest.fn(),
     },
     $transaction: jest.fn(),
   },
@@ -20,11 +28,26 @@ describe("CheckoutService", () => {
     cart: {
       findFirst: jest.Mock
     }
+    order: {
+      findFirst: jest.Mock
+      findUnique: jest.Mock
+      updateMany: jest.Mock
+    }
     $transaction: jest.Mock
   }
 
   beforeEach(() => {
     jest.clearAllMocks()
+    mockedPrisma.order.findFirst.mockResolvedValue(null)
+    mockedPrisma.order.findUnique.mockResolvedValue(null)
+    mockedPrisma.order.updateMany.mockResolvedValue({ count: 1 })
+    ;(paymentsService.getIntent as jest.Mock).mockResolvedValue({
+      id: "pi_mock_123",
+      status: "succeeded",
+      amountInCents: 21000,
+      currency: "PHP",
+      cartId: "cart-1",
+    })
   })
 
   function setupActiveCart() {
@@ -48,61 +71,73 @@ describe("CheckoutService", () => {
   }
 
   function setupTransactionMocks() {
-    const txOrderCreate = jest.fn().mockResolvedValue({
-      id: "order-1",
-      status: "PENDING",
-      paymentIntentId: null,
-      subtotalInCents: 20000,
-      shippingFeeInCents: 0,
-      taxInCents: 1000,
-      totalInCents: 21000,
-      customerEmail: "buyer@example.com",
-      customerName: "Buyer",
-      shippingAddressLine1: "123 Main",
-      shippingAddressLine2: null,
-      city: "Quezon City",
-      province: "Metro Manila",
-      postalCode: "1100",
-      phone: null,
-      notes: "Delivery option: Anytime | Payment method: Cash on delivery",
-      createdAt: new Date(),
-      items: [
-        {
-          id: "order-item-1",
-          productId: "prod-1",
-          quantity: 2,
-          unitPriceInCents: 10000,
-          lineTotalInCents: 20000,
-          product: {
-            id: "prod-1",
-            slug: "prod-1",
-            name: "Product 1",
-            imageUrl: null,
+    const txOrderCreate = jest.fn().mockImplementation(
+      async ({ data }: { data: { status: string; paymentIntentId?: string | null } }) => ({
+        id: "order-1",
+        status: data.status,
+        paymentIntentId: data.paymentIntentId ?? null,
+        subtotalInCents: 20000,
+        shippingFeeInCents: 0,
+        taxInCents: 1000,
+        totalInCents: 21000,
+        customerEmail: "buyer@example.com",
+        customerName: "Buyer",
+        shippingAddressLine1: "123 Main",
+        shippingAddressLine2: null,
+        city: "Quezon City",
+        province: "Metro Manila",
+        postalCode: "1100",
+        phone: null,
+        notes: "Delivery option: Anytime | Payment method: Cash on delivery",
+        createdAt: new Date(),
+        items: [
+          {
+            id: "order-item-1",
+            productId: "prod-1",
+            quantity: 2,
+            unitPriceInCents: 10000,
+            lineTotalInCents: 20000,
+            product: {
+              id: "prod-1",
+              slug: "prod-1",
+              name: "Product 1",
+              imageUrl: null,
+            },
           },
-        },
-      ],
-    })
+        ],
+      })
+    )
 
     const txCartUpdate = jest.fn().mockResolvedValue({ count: 1 })
     const txCartCreate = jest.fn().mockResolvedValue({ id: "cart-2" })
     const txProductUpdate = jest.fn().mockResolvedValue({ count: 1 })
+    const txOrderUpdateMany = jest.fn().mockResolvedValue({ count: 1 })
+    const txProductIncrement = jest.fn().mockResolvedValue({})
 
     mockedPrisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
       const tx = {
         order: {
           create: txOrderCreate,
+          updateMany: txOrderUpdateMany,
         },
         cart: {
           updateMany: txCartUpdate,
           create: txCartCreate,
         },
-        product: { updateMany: txProductUpdate },
+        product: { updateMany: txProductUpdate, update: txProductIncrement },
       }
 
       return fn(tx)
     })
 
-    return { txOrderCreate, txCartCreate, txCartUpdate, txProductUpdate }
+    return {
+      txOrderCreate,
+      txCartCreate,
+      txCartUpdate,
+      txProductUpdate,
+      txOrderUpdateMany,
+      txProductIncrement,
+    }
   }
 
   it("creates a fresh active cart after converting cart to order", async () => {
@@ -244,12 +279,12 @@ describe("CheckoutService", () => {
     ).rejects.toBeInstanceOf(BadRequestException)
   })
 
-  it("stores payment intent id in dedicated order field for card payments", async () => {
+  it("creates the order pending before confirming a card payment", async () => {
     const service = new CheckoutService(paymentsService)
     setupActiveCart()
     const { txOrderCreate } = setupTransactionMocks()
 
-    await service.createPendingOrder(
+    const result = await service.createPendingOrder(
       { userId: "user-1", guestId: "guest-1" },
       {
         customerEmail: "buyer@example.com",
@@ -263,23 +298,200 @@ describe("CheckoutService", () => {
       }
     )
 
-    expect(paymentsService.verifySuccessfulIntent).toHaveBeenCalledWith('pi_mock_123', 21000, 'cart-1')
     expect(txOrderCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          status: 'CONFIRMED',
+          status: "PENDING",
           paymentIntentId: "pi_mock_123",
           notes: expect.stringContaining("Payment method: Card"),
         }),
       })
     )
+    expect(paymentsService.getIntent).toHaveBeenCalledWith("pi_mock_123")
+    expect(mockedPrisma.order.updateMany).toHaveBeenCalledWith({
+      where: { id: "order-1", status: "PENDING" },
+      data: { status: "CONFIRMED" },
+    })
+    expect(result.status).toBe("CONFIRMED")
+  })
 
-    expect(txOrderCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          notes: expect.not.stringContaining("Payment intent:"),
-        }),
-      })
+  it("returns the existing order when checkout retries the same payment intent", async () => {
+    const service = new CheckoutService(paymentsService)
+    mockedPrisma.order.findFirst.mockResolvedValue({
+      id: "order-existing",
+      status: "CONFIRMED",
+      paymentIntentId: "pi_mock_123",
+      subtotalInCents: 20000,
+      shippingFeeInCents: 0,
+      taxInCents: 1000,
+      totalInCents: 21000,
+      customerEmail: "buyer@example.com",
+      customerName: "Buyer",
+      shippingAddressLine1: "123 Main",
+      shippingAddressLine2: null,
+      city: "Quezon City",
+      province: "Metro Manila",
+      postalCode: "1100",
+      phone: null,
+      notes: null,
+      createdAt: new Date(),
+      items: [
+        {
+          id: "order-item-1",
+          productId: "prod-1",
+          quantity: 2,
+          unitPriceInCents: 10000,
+          lineTotalInCents: 20000,
+          product: {
+            id: "prod-1",
+            slug: "prod-1",
+            name: "Product 1",
+            imageUrl: null,
+          },
+        },
+      ],
+    })
+
+    const result = await service.createPendingOrder(
+      { userId: "user-1", guestId: "guest-1" },
+      {
+        customerEmail: "buyer@example.com",
+        customerName: "Buyer",
+        shippingAddressLine1: "123 Main",
+        city: "Quezon City",
+        province: "Metro Manila",
+        postalCode: "1100",
+        paymentMethod: "card",
+        paymentIntentId: "pi_mock_123",
+      }
     )
+
+    expect(result.id).toBe("order-existing")
+    expect(result.itemCount).toBe(2)
+    expect(mockedPrisma.cart.findFirst).not.toHaveBeenCalled()
+    expect(mockedPrisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it("confirms a pending order when checkout is retried after payment succeeds", async () => {
+    const service = new CheckoutService(paymentsService)
+    mockedPrisma.order.findFirst.mockResolvedValue({
+      id: "order-existing",
+      status: "PENDING",
+      paymentIntentId: "pi_mock_123",
+      subtotalInCents: 20000,
+      shippingFeeInCents: 0,
+      taxInCents: 1000,
+      totalInCents: 21000,
+      customerEmail: "buyer@example.com",
+      customerName: "Buyer",
+      shippingAddressLine1: "123 Main",
+      shippingAddressLine2: null,
+      city: "Quezon City",
+      province: "Metro Manila",
+      postalCode: "1100",
+      phone: null,
+      notes: null,
+      createdAt: new Date(),
+      items: [
+        {
+          id: "order-item-1",
+          productId: "prod-1",
+          quantity: 2,
+          unitPriceInCents: 10000,
+          lineTotalInCents: 20000,
+          product: {
+            id: "prod-1",
+            slug: "prod-1",
+            name: "Product 1",
+            imageUrl: null,
+          },
+        },
+      ],
+    })
+
+    const result = await service.createPendingOrder(
+      { userId: "user-1", guestId: "guest-1" },
+      {
+        customerEmail: "buyer@example.com",
+        customerName: "Buyer",
+        shippingAddressLine1: "123 Main",
+        city: "Quezon City",
+        province: "Metro Manila",
+        postalCode: "1100",
+        paymentMethod: "card",
+        paymentIntentId: "pi_mock_123",
+      }
+    )
+
+    expect(result.status).toBe("CONFIRMED")
+    expect(mockedPrisma.order.updateMany).toHaveBeenCalledWith({
+      where: { id: "order-existing", status: "PENDING" },
+      data: { status: "CONFIRMED" },
+    })
+    expect(mockedPrisma.cart.findFirst).not.toHaveBeenCalled()
+    expect(mockedPrisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it("leaves the order pending when the payment provider lookup fails transiently", async () => {
+    const service = new CheckoutService(paymentsService)
+    setupActiveCart()
+    setupTransactionMocks()
+    ;(paymentsService.getIntent as jest.Mock).mockRejectedValue(new Error("provider unavailable"))
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined)
+
+    try {
+      const result = await service.createPendingOrder(
+        { userId: "user-1", guestId: "guest-1" },
+        {
+          customerEmail: "buyer@example.com",
+          customerName: "Buyer",
+          shippingAddressLine1: "123 Main",
+          city: "Quezon City",
+          province: "Metro Manila",
+          postalCode: "1100",
+          paymentMethod: "card",
+          paymentIntentId: "pi_mock_123",
+        }
+      )
+
+      expect(result.status).toBe("PENDING")
+      expect(mockedPrisma.order.updateMany).not.toHaveBeenCalled()
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it("cancels and restocks the order when the payment intent is invalid", async () => {
+    const service = new CheckoutService(paymentsService)
+    setupActiveCart()
+    const { txOrderUpdateMany, txProductIncrement } = setupTransactionMocks()
+    ;(paymentsService.getIntent as jest.Mock).mockRejectedValue(
+      new BadRequestException("Payment intent not found")
+    )
+
+    await expect(
+      service.createPendingOrder(
+        { userId: "user-1", guestId: "guest-1" },
+        {
+          customerEmail: "buyer@example.com",
+          customerName: "Buyer",
+          shippingAddressLine1: "123 Main",
+          city: "Quezon City",
+          province: "Metro Manila",
+          postalCode: "1100",
+          paymentMethod: "card",
+          paymentIntentId: "pi_mock_missing",
+        }
+      )
+    ).rejects.toBeInstanceOf(BadRequestException)
+
+    expect(txOrderUpdateMany).toHaveBeenCalledWith({
+      where: { id: "order-1", status: "PENDING" },
+      data: { status: "CANCELLED" },
+    })
+    expect(txProductIncrement).toHaveBeenCalledWith({
+      where: { id: "prod-1" },
+      data: { stock: { increment: 2 } },
+    })
   })
 })

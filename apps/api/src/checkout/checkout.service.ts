@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common"
 import { calculateOrderTotals, TAX_RATE } from '@workspace/pricing'
 import { PaymentsService } from '../payments/payments.service'
+import type { PaymentIntentResponse } from '../payments/payments.types'
 
 import { apiEnv, prisma } from "../prisma"
 import type { CheckoutPayload, CheckoutRequestIdentity } from "./checkout.types"
@@ -16,6 +17,34 @@ type OrderItem = {
   unitPriceInCents: number
   lineTotalInCents: number
   product: { name: string; slug: string; id: string; imageUrl: string | null }
+}
+
+type CheckoutOrder = {
+  id: string
+  status: string
+  paymentIntentId: string | null
+  subtotalInCents: number
+  shippingFeeInCents: number
+  taxInCents: number
+  totalInCents: number
+  customerEmail: string
+  customerName: string
+  shippingAddressLine1: string
+  shippingAddressLine2: string | null
+  city: string
+  province: string
+  postalCode: string
+  phone: string | null
+  notes: string | null
+  createdAt: Date
+  items: Array<{
+    id: string
+    productId: string
+    quantity: number
+    unitPriceInCents: number
+    lineTotalInCents: number
+    product: { id: string; slug: string; name: string; imageUrl: string | null }
+  }>
 }
 
 async function sendOrderConfirmationEmail(order: {
@@ -117,6 +146,214 @@ function getDeliveryOptionLabel(option: "anytime" | "morning" | "afternoon") {
 export class CheckoutService {
   constructor(private readonly paymentsService: PaymentsService) {}
 
+  private identityScope(identity: CheckoutRequestIdentity) {
+    if (identity.userId) return { userId: identity.userId }
+    if (identity.guestId) return { guestId: identity.guestId, userId: null }
+    return null
+  }
+
+  private async findOrderByIntent(
+    identity: CheckoutRequestIdentity,
+    paymentIntentId: string
+  ) {
+    const scope = this.identityScope(identity)
+    if (!scope) return null
+
+    return prisma.order.findFirst({
+      where: { paymentIntentId, ...scope },
+      include: {
+        items: {
+          orderBy: { createdAt: "asc" },
+          include: {
+            product: {
+              select: { id: true, slug: true, name: true, imageUrl: true },
+            },
+          },
+        },
+      },
+    })
+  }
+
+  private toOrderResponse(order: CheckoutOrder) {
+    return {
+      id: order.id,
+      status: order.status,
+      subtotalInCents: order.subtotalInCents,
+      shippingFeeInCents: order.shippingFeeInCents,
+      taxInCents: order.taxInCents,
+      totalInCents: order.totalInCents,
+      itemCount: order.items.reduce((sum, item) => sum + item.quantity, 0),
+      customerEmail: order.customerEmail,
+      customerName: order.customerName,
+      shippingAddressLine1: order.shippingAddressLine1,
+      shippingAddressLine2: order.shippingAddressLine2,
+      city: order.city,
+      province: order.province,
+      postalCode: order.postalCode,
+      phone: order.phone,
+      notes: order.notes,
+      createdAt: order.createdAt,
+      items: order.items.map((item) => ({
+        id: item.id,
+        productId: item.productId,
+        quantity: item.quantity,
+        unitPriceInCents: item.unitPriceInCents,
+        lineTotalInCents: item.lineTotalInCents,
+        product: item.product,
+      })),
+    }
+  }
+
+  /**
+   * Reverts a pending order that never received a valid payment. The original
+   * cart remains converted, but stock is released and the customer is not
+   * left with a paid-but-missing order.
+   */
+  private async cancelPendingOrder(order: CheckoutOrder) {
+    await prisma.$transaction(async (tx) => {
+      const cancelled = await tx.order.updateMany({
+        where: { id: order.id, status: "PENDING" },
+        data: { status: "CANCELLED" },
+      })
+      if (cancelled.count !== 1) return
+
+      for (const item of order.items) {
+        await tx.product.update({
+          where: { id: item.productId },
+          data: { stock: { increment: item.quantity } },
+        })
+      }
+    })
+  }
+
+  private isPaymentIntentMissing(error: unknown): boolean {
+    if (error instanceof BadRequestException) return true
+
+    return (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "resource_missing"
+    )
+  }
+
+  /**
+   * Confirms a pending order when its payment succeeded. The order is created
+   * before this lookup, so a provider outage leaves a PENDING row that the
+   * webhook or a checkout retry can reconcile instead of a charge with no order.
+   */
+  private async applyCardPayment(
+    order: CheckoutOrder,
+    cartId: string,
+    expectedTotalInCents: number
+  ): Promise<CheckoutOrder> {
+    if (!order.paymentIntentId) return order
+
+    let intent: PaymentIntentResponse
+    try {
+      intent = await this.paymentsService.getIntent(order.paymentIntentId)
+    } catch (error) {
+      if (this.isPaymentIntentMissing(error)) {
+        await this.cancelPendingOrder(order)
+        throw new BadRequestException("Payment intent not found")
+      }
+
+      console.error(
+        "[checkout] payment verification failed; order remains pending:",
+        error
+      )
+      return order
+    }
+
+    if (
+      intent.amountInCents !== expectedTotalInCents ||
+      intent.currency !== "PHP" ||
+      intent.cartId !== cartId
+    ) {
+      await this.cancelPendingOrder(order)
+      throw new BadRequestException("Payment intent does not match this order")
+    }
+
+    if (intent.status === "succeeded") {
+      const confirmed = await prisma.order.updateMany({
+        where: { id: order.id, status: "PENDING" },
+        data: { status: "CONFIRMED" },
+      })
+
+      if (confirmed.count === 1) {
+        return { ...order, status: "CONFIRMED" }
+      }
+
+      const current = await prisma.order.findUnique({
+        where: { id: order.id },
+        include: {
+          items: {
+            orderBy: { createdAt: "asc" },
+            include: {
+              product: {
+                select: { id: true, slug: true, name: true, imageUrl: true },
+              },
+            },
+          },
+        },
+      })
+
+      return current ?? order
+    }
+
+    if (intent.status === "canceled" || intent.status === "requires_payment_method") {
+      await this.cancelPendingOrder(order)
+      throw new BadRequestException("Payment was not completed")
+    }
+
+    // Processing or action-required intents stay pending until the provider
+    // webhook confirms them. The order and its stock reservation already exist.
+    return order
+  }
+
+  private sendConfirmation(order: CheckoutOrder) {
+    // Fire-and-forget — email failure must never fail a successful order
+    sendOrderConfirmationEmail({
+      id: order.id,
+      customerEmail: order.customerEmail,
+      customerName: order.customerName,
+      totalInCents: order.totalInCents,
+      subtotalInCents: order.subtotalInCents,
+      shippingFeeInCents: order.shippingFeeInCents,
+      taxInCents: order.taxInCents,
+      items: order.items,
+    }).catch((err) => console.error("[checkout] confirmation email error:", err))
+  }
+
+  private async confirmPendingOrderIfPaid(
+    order: CheckoutOrder
+  ): Promise<CheckoutOrder> {
+    if (order.status !== "PENDING" || !order.paymentIntentId) return order
+
+    try {
+      const intent = await this.paymentsService.getIntent(order.paymentIntentId)
+      if (
+        intent.status === "succeeded" &&
+        intent.amountInCents === order.totalInCents &&
+        intent.currency === "PHP"
+      ) {
+        const confirmed = await prisma.order.updateMany({
+          where: { id: order.id, status: "PENDING" },
+          data: { status: "CONFIRMED" },
+        })
+        if (confirmed.count === 1) {
+          const confirmedOrder = { ...order, status: "CONFIRMED" }
+          this.sendConfirmation(confirmedOrder)
+          return confirmedOrder
+        }
+      }
+    } catch (error) {
+      console.error("[checkout] could not reconcile pending order:", error)
+    }
+
+    return order
+  }
+
   private async getActiveCart(identity: CheckoutRequestIdentity) {
     const scope = identity.userId
       ? { userId: identity.userId }
@@ -175,6 +412,25 @@ export class CheckoutService {
   async createPendingOrder(identity: CheckoutRequestIdentity, payload: CheckoutPayload) {
     this.validatePayload(payload)
 
+    const paymentMethod = payload.paymentMethod === "card" ? "card" : "cod"
+    const paymentIntentId = normalize(payload.paymentIntentId) || null
+
+    if (paymentMethod === "card" && !paymentIntentId) {
+      throw new BadRequestException("paymentIntentId is required for card payments")
+    }
+    if (paymentMethod === "cod" && paymentIntentId) {
+      throw new BadRequestException("Cash-on-delivery orders cannot include a payment intent")
+    }
+
+    // The payment intent is the idempotency key for card checkout. A retry
+    // must return the committed order instead of consuming another cart.
+    if (paymentIntentId) {
+      const existing = await this.findOrderByIntent(identity, paymentIntentId)
+      if (existing) {
+        return this.toOrderResponse(await this.confirmPendingOrderIfPaid(existing))
+      }
+    }
+
     const cart = await this.getActiveCart(identity)
 
     for (const item of cart.items) {
@@ -197,141 +453,122 @@ export class CheckoutService {
       payload.deliveryOption === "morning" || payload.deliveryOption === "afternoon"
         ? payload.deliveryOption
         : "anytime"
-    const paymentMethod = payload.paymentMethod === "card" ? "card" : "cod"
-    const paymentIntentId = normalize(payload.paymentIntentId) || null
-
-    if (paymentMethod === "card" && !paymentIntentId) {
-      throw new BadRequestException("paymentIntentId is required for card payments")
-    }
-    if (paymentMethod === 'cod' && paymentIntentId) {
-      throw new BadRequestException('Cash-on-delivery orders cannot include a payment intent')
-    }
     const totals = calculateOrderTotals(subtotalInCents, shippingMethod)
     const { shippingFeeInCents, taxInCents, totalInCents } = totals
 
-    if (paymentIntentId) {
-      await this.paymentsService.verifySuccessfulIntent(paymentIntentId, totalInCents, cart.id)
-    }
-
-    const order = await prisma.$transaction(async (tx) => {
-      // Only one checkout can convert this cart. Stock updates and the order must commit together.
-      const claim = await tx.cart.updateMany({
-        where: { id: cart.id, status: 'active' },
-        data: { status: 'converted' },
-      })
-      if (claim.count !== 1) throw new BadRequestException('Cart has already been checked out')
-
-      for (const item of cart.items) {
-        const reserved = await tx.product.updateMany({
-          where: { id: item.productId, isActive: true, stock: { gte: item.quantity }, priceInCents: item.product.priceInCents },
-          data: { stock: { decrement: item.quantity } },
+    let order: CheckoutOrder
+    try {
+      order = await prisma.$transaction(async (tx) => {
+        // Only one checkout can convert this cart. Stock updates and the order
+        // must commit together.
+        const claim = await tx.cart.updateMany({
+          where: { id: cart.id, status: 'active' },
+          data: { status: 'converted' },
         })
-        if (reserved.count !== 1) throw new BadRequestException('Product availability or price changed; refresh your cart')
-      }
+        if (claim.count !== 1) {
+          throw new BadRequestException('Cart has already been checked out')
+        }
 
-      const createdOrder = await tx.order.create({
-        data: {
-          userId: identity.userId,
-          // Signed-in orders are account-scoped only. A browser guest id must
-          // never remain attached to them after the account signs out.
-          guestId: identity.userId ? null : identity.guestId,
-          status: paymentIntentId ? 'CONFIRMED' : 'PENDING',
-          customerEmail: normalize(payload.customerEmail),
-          customerName: normalize(payload.customerName),
-          shippingAddressLine1: normalize(payload.shippingAddressLine1),
-          shippingAddressLine2: normalize(payload.shippingAddressLine2) || null,
-          city: normalize(payload.city),
-          province: normalize(payload.province),
-          postalCode: normalize(payload.postalCode),
-          phone: normalize(payload.phone) || null,
-          notes:
-            [
-              normalize(payload.notes) || null,
-              `Delivery option: ${getDeliveryOptionLabel(deliveryOption)}`,
-              `Payment method: ${paymentMethod === "cod" ? "Cash on delivery" : "Card"}`,
-            ]
-              .filter(Boolean)
-              .join(" | ") || null,
-          paymentIntentId,
-          subtotalInCents,
-          shippingFeeInCents,
-          taxInCents,
-          totalInCents,
-          items: {
-            create: cart.items.map((item) => ({
-              productId: item.productId,
-              quantity: item.quantity,
-              unitPriceInCents: item.product.priceInCents,
-              lineTotalInCents: item.product.priceInCents * item.quantity,
-            })),
+        for (const item of cart.items) {
+          const reserved = await tx.product.updateMany({
+            where: {
+              id: item.productId,
+              isActive: true,
+              stock: { gte: item.quantity },
+              priceInCents: item.product.priceInCents,
+            },
+            data: { stock: { decrement: item.quantity } },
+          })
+          if (reserved.count !== 1) {
+            throw new BadRequestException('Product availability or price changed; refresh your cart')
+          }
+        }
+
+        const createdOrder = await tx.order.create({
+          data: {
+            userId: identity.userId,
+            // Signed-in orders are account-scoped only. A browser guest id must
+            // never remain attached to them after the account signs out.
+            guestId: identity.userId ? null : identity.guestId,
+            // The order exists before payment is applied. Card orders move to
+            // CONFIRMED only after the provider verifies the intent succeeded.
+            status: 'PENDING',
+            customerEmail: normalize(payload.customerEmail),
+            customerName: normalize(payload.customerName),
+            shippingAddressLine1: normalize(payload.shippingAddressLine1),
+            shippingAddressLine2: normalize(payload.shippingAddressLine2) || null,
+            city: normalize(payload.city),
+            province: normalize(payload.province),
+            postalCode: normalize(payload.postalCode),
+            phone: normalize(payload.phone) || null,
+            notes:
+              [
+                normalize(payload.notes) || null,
+                `Delivery option: ${getDeliveryOptionLabel(deliveryOption)}`,
+                `Payment method: ${paymentMethod === "cod" ? "Cash on delivery" : "Card"}`,
+              ]
+                .filter(Boolean)
+                .join(" | ") || null,
+            paymentIntentId,
+            subtotalInCents,
+            shippingFeeInCents,
+            taxInCents,
+            totalInCents,
+            items: {
+              create: cart.items.map((item) => ({
+                productId: item.productId,
+                quantity: item.quantity,
+                unitPriceInCents: item.product.priceInCents,
+                lineTotalInCents: item.product.priceInCents * item.quantity,
+              })),
+            },
           },
-        },
-        include: {
-          items: {
-            orderBy: { createdAt: "asc" },
-            include: {
-              product: {
-                select: {
-                  id: true,
-                  slug: true,
-                  name: true,
-                  imageUrl: true,
+          include: {
+            items: {
+              orderBy: { createdAt: "asc" },
+              include: {
+                product: {
+                  select: {
+                    id: true,
+                    slug: true,
+                    name: true,
+                    imageUrl: true,
+                  },
                 },
               },
             },
           },
-        },
+        })
+
+        await tx.cart.create({
+          data: {
+            userId: identity.userId,
+            guestId: identity.userId ? null : identity.guestId,
+            status: "active",
+          },
+        })
+
+        return createdOrder
       })
-
-      await tx.cart.create({
-        data: {
-          userId: identity.userId,
-          guestId: identity.userId ? null : identity.guestId,
-          status: "active",
-        },
-      })
-
-      return createdOrder
-    })
-
-    // Fire-and-forget — email failure must never fail a successful order
-    sendOrderConfirmationEmail({
-      id: order.id,
-      customerEmail: order.customerEmail,
-      customerName: order.customerName,
-      totalInCents: order.totalInCents,
-      subtotalInCents: order.subtotalInCents,
-      shippingFeeInCents: order.shippingFeeInCents,
-      taxInCents: order.taxInCents,
-      items: order.items,
-    }).catch((err) => console.error("[checkout] confirmation email error:", err))
-
-    return {
-      id: order.id,
-      status: order.status,
-      subtotalInCents: order.subtotalInCents,
-      shippingFeeInCents: order.shippingFeeInCents,
-      taxInCents: order.taxInCents,
-      totalInCents: order.totalInCents,
-      itemCount: order.items.reduce((sum, item) => sum + item.quantity, 0),
-      customerEmail: order.customerEmail,
-      customerName: order.customerName,
-      shippingAddressLine1: order.shippingAddressLine1,
-      shippingAddressLine2: order.shippingAddressLine2,
-      city: order.city,
-      province: order.province,
-      postalCode: order.postalCode,
-      phone: order.phone,
-      notes: order.notes,
-      createdAt: order.createdAt,
-      items: order.items.map((item) => ({
-        id: item.id,
-        productId: item.productId,
-        quantity: item.quantity,
-        unitPriceInCents: item.unitPriceInCents,
-        lineTotalInCents: item.lineTotalInCents,
-        product: item.product,
-      })),
+    } catch (error) {
+      if (paymentIntentId) {
+        // A concurrent retry may have committed the same payment intent first.
+        const existing = await this.findOrderByIntent(identity, paymentIntentId)
+        if (existing) {
+          return this.toOrderResponse(await this.confirmPendingOrderIfPaid(existing))
+        }
+      }
+      throw error
     }
+
+    const finalOrder = paymentIntentId
+      ? await this.applyCardPayment(order, cart.id, totalInCents)
+      : order
+
+    if (!paymentIntentId || finalOrder.status === "CONFIRMED") {
+      this.sendConfirmation(finalOrder)
+    }
+
+    return this.toOrderResponse(finalOrder)
   }
 }
