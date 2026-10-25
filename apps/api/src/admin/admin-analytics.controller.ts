@@ -3,6 +3,13 @@ import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
 import { prisma } from '../prisma';
 import { AdminApiGuard } from './admin-api.guard';
 
+function localDayKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 @AllowAnonymous()
 @UseGuards(AdminApiGuard)
 @Controller('admin/analytics')
@@ -39,8 +46,9 @@ export class AdminAnalyticsController {
   async getRevenueByDay(@Query('days') days?: string) {
     const numDays = Math.min(Math.max(Number.parseInt(days ?? '30', 10) || 30, 1), 365);
     const startDate = new Date();
-    startDate.setDate(startDate.getDate() - numDays);
     startDate.setHours(0, 0, 0, 0);
+    // Include today: a 30-day chart covers today and the previous 29 days.
+    startDate.setDate(startDate.getDate() - (numDays - 1));
 
     const orders = await prisma.order.findMany({
       where: {
@@ -56,7 +64,7 @@ export class AdminAnalyticsController {
     const ordersByDay = new Map<string, number>();
 
     for (const order of orders) {
-      const day = order.createdAt.toISOString().split('T')[0];
+      const day = localDayKey(order.createdAt);
       revenueByDay.set(day, (revenueByDay.get(day) ?? 0) + order.totalInCents);
       ordersByDay.set(day, (ordersByDay.get(day) ?? 0) + 1);
     }
@@ -66,7 +74,7 @@ export class AdminAnalyticsController {
     for (let i = 0; i < numDays; i++) {
       const date = new Date(startDate);
       date.setDate(date.getDate() + i);
-      const day = date.toISOString().split('T')[0];
+      const day = localDayKey(date);
       result.push({
         date: day,
         revenue: revenueByDay.get(day) ?? 0,

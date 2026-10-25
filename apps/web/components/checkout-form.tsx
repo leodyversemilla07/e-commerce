@@ -9,6 +9,12 @@ import { formatPHP } from "@/lib/catalog"
 import { createPendingOrder, type CheckoutPayload, type OrderResponse } from "@/lib/checkout"
 import { confirmPaymentIntent, createPaymentIntent, getPaymentCapabilities } from "@/lib/payments"
 import { useCheckoutStore } from "@/providers/checkout-store-provider"
+import {
+  getShippingFeeInCents,
+  getTaxInCents,
+  SHIPPING_FEES_IN_CENTS,
+  type ShippingMethod,
+} from "@workspace/pricing"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { Input } from "@workspace/ui/components/input"
@@ -18,7 +24,6 @@ type CheckoutFormProps = {
   itemCount: number
 }
 
-type ShippingMethod = "standard" | "express"
 type PaymentMethod = "cod" | "card"
 type DeliveryOption = "anytime" | "morning" | "afternoon"
 
@@ -38,10 +43,6 @@ function getErrorMessage(error: unknown, fallback: string) {
   if (!error || typeof error !== "object") return fallback
   if ("message" in error && typeof error.message === "string") return error.message
   return fallback
-}
-
-function getShippingFeeInCents(method: ShippingMethod) {
-  return method === "express" ? 19900 : 0
 }
 
 export function CheckoutForm({ subtotalInCents, itemCount }: CheckoutFormProps) {
@@ -67,6 +68,11 @@ export function CheckoutForm({ subtotalInCents, itemCount }: CheckoutFormProps) 
     return () => { active = false }
   }, [])
   const [order, setOrder] = useState<OrderResponse | null>(null)
+  const [placedWith, setPlacedWith] = useState<{
+    shippingMethod: ShippingMethod
+    deliveryOption: DeliveryOption
+    paymentMethod: PaymentMethod
+  } | null>(null)
 
   const canSubmit = useMemo(() => {
     return (
@@ -80,7 +86,7 @@ export function CheckoutForm({ subtotalInCents, itemCount }: CheckoutFormProps) 
   }, [form])
 
   const shippingInCents = useMemo(() => getShippingFeeInCents(shippingMethod), [shippingMethod])
-  const estimatedTaxInCents = useMemo(() => Math.round(subtotalInCents * 0.05), [subtotalInCents])
+  const estimatedTaxInCents = useMemo(() => getTaxInCents(subtotalInCents), [subtotalInCents])
   const totalInCents = useMemo(
     () => subtotalInCents + shippingInCents + estimatedTaxInCents,
     [estimatedTaxInCents, shippingInCents, subtotalInCents]
@@ -129,6 +135,7 @@ export function CheckoutForm({ subtotalInCents, itemCount }: CheckoutFormProps) 
         paymentMethod,
         paymentIntentId,
       })
+      setPlacedWith({ shippingMethod, deliveryOption, paymentMethod })
       setOrder(created)
       resetCheckoutState()
       await queryClient.invalidateQueries({ queryKey: ["cart"] })
@@ -158,13 +165,13 @@ export function CheckoutForm({ subtotalInCents, itemCount }: CheckoutFormProps) 
             {order.province} {order.postalCode}
           </p>
           <p className="text-muted-foreground">
-            Shipping: {shippingMethod === "standard" ? "Standard" : "Express"} · Delivery:{" "}
-            {deliveryOption === "anytime"
-              ? "Anytime"
-              : deliveryOption === "morning"
-                ? "Morning (8AM–12PM)"
-                : "Afternoon (1PM–6PM)"}{" "}
-            · Payment: {paymentMethod === "cod" ? "Cash on delivery" : "Card"}
+            Shipping: {placedWith?.shippingMethod === "express" ? "Express" : "Standard"} · Delivery:{" "}
+            {placedWith?.deliveryOption === "morning"
+              ? "Morning (8AM–12PM)"
+              : placedWith?.deliveryOption === "afternoon"
+                ? "Afternoon (1PM–6PM)"
+                : "Anytime"}{" "}
+            · Payment: {placedWith?.paymentMethod === "card" ? "Card" : "Cash on delivery"}
           </p>
         </CardContent>
       </Card>
@@ -260,7 +267,7 @@ export function CheckoutForm({ subtotalInCents, itemCount }: CheckoutFormProps) 
               className="justify-between text-left"
             >
               <span className="text-sm">Express (next day)</span>
-              <span className="text-xs">{formatPHP(19900)}</span>
+              <span className="text-xs">{formatPHP(SHIPPING_FEES_IN_CENTS.express)}</span>
             </Button>
           </CardContent>
         </Card>

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { BadRequestException, Injectable, InternalServerErrorException, ServiceUnavailableException } from "@nestjs/common"
+import { calculateOrderTotals } from '@workspace/pricing'
 
 import { prisma } from "../prisma"
 import { CartService } from '../cart/cart.service'
@@ -405,8 +406,7 @@ export class PaymentsService {
       throw new BadRequestException('Invalid shipping method')
     }
     const cart = await this.pricedCart(identity)
-    const total = cart.subtotal + Math.round(cart.subtotal * 0.05) +
-      (payload.shippingMethod === 'express' ? 19900 : 0)
+    const total = calculateOrderTotals(cart.subtotal, payload.shippingMethod ?? 'standard').totalInCents
     if (payload.amountInCents !== total) {
       throw new BadRequestException('Payment amount does not match cart total')
     }

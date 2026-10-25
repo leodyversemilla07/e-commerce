@@ -1,7 +1,8 @@
 import { BadRequestException, Injectable } from "@nestjs/common"
+import { calculateOrderTotals, TAX_RATE } from '@workspace/pricing'
 import { PaymentsService } from '../payments/payments.service'
 
-import { prisma } from "../prisma"
+import { apiEnv, prisma } from "../prisma"
 import type { CheckoutPayload, CheckoutRequestIdentity } from "./checkout.types"
 
 function escapeHtml(value: string): string {
@@ -27,14 +28,13 @@ async function sendOrderConfirmationEmail(order: {
   taxInCents: number
   items: OrderItem[]
 }): Promise<void> {
-  const apiKey = process.env.RESEND_API_KEY?.trim()
+  const apiKey = apiEnv.RESEND_API_KEY
+  const from = apiEnv.RESEND_FROM_EMAIL
 
-  if (!apiKey) {
-    console.log(`[checkout] order confirmation for ${order.customerEmail} — order ${order.id}`)
+  if (!apiKey || !from) {
+    console.log(`[checkout] order confirmation email not configured; skipping order ${order.id}`)
     return
   }
-
-  const from = process.env.RESEND_FROM_EMAIL?.trim() ?? "no-reply@leodyversemilla07.com"
 
   const formatPrice = (cents: number) =>
     `₱${(cents / 100).toLocaleString("en-PH", { minimumFractionDigits: 2 })}`
@@ -70,7 +70,7 @@ async function sendOrderConfirmationEmail(order: {
       <table style="width:100%;margin:8px 0">
         <tr><td>Subtotal</td><td style="text-align:right">${formatPrice(order.subtotalInCents)}</td></tr>
         <tr><td>Shipping</td><td style="text-align:right">${formatPrice(order.shippingFeeInCents)}</td></tr>
-        <tr><td>Tax (5%)</td><td style="text-align:right">${formatPrice(order.taxInCents)}</td></tr>
+        <tr><td>Tax (${TAX_RATE * 100}%)</td><td style="text-align:right">${formatPrice(order.taxInCents)}</td></tr>
         <tr style="font-weight:bold;border-top:2px solid #111">
           <td style="padding-top:8px">Total</td>
           <td style="padding-top:8px;text-align:right">${formatPrice(order.totalInCents)}</td>
@@ -78,7 +78,7 @@ async function sendOrderConfirmationEmail(order: {
       </table>
 
       <p style="color:#666;font-size:12px;margin-top:24px">
-        You can track your order status in your account. We'll notify you when it ships.
+        You can track your order status in your account.
       </p>
     </div>
   `.trim()
@@ -105,10 +105,6 @@ async function sendOrderConfirmationEmail(order: {
 
 function normalize(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
-}
-
-function getShippingFeeInCents(method: "standard" | "express") {
-  return method === "express" ? 19900 : 0
 }
 
 function getDeliveryOptionLabel(option: "anytime" | "morning" | "afternoon") {
@@ -204,9 +200,8 @@ export class CheckoutService {
     if (paymentMethod === 'cod' && paymentIntentId) {
       throw new BadRequestException('Cash-on-delivery orders cannot include a payment intent')
     }
-    const shippingFeeInCents = getShippingFeeInCents(shippingMethod)
-    const taxInCents = Math.round(subtotalInCents * 0.05)
-    const totalInCents = subtotalInCents + shippingFeeInCents + taxInCents
+    const totals = calculateOrderTotals(subtotalInCents, shippingMethod)
+    const { shippingFeeInCents, taxInCents, totalInCents } = totals
 
     if (paymentIntentId) {
       await this.paymentsService.verifySuccessfulIntent(paymentIntentId, totalInCents, cart.id)

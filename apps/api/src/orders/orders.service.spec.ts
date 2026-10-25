@@ -208,6 +208,48 @@ describe('OrdersService', () => {
     });
   });
 
+  // ─── expireStalePendingOrders ──────────────────────────────────────────────
+
+  describe('expireStalePendingOrders', () => {
+    it('cancels stale COD orders and restores their stock', async () => {
+      mockedPrisma.order.findMany.mockResolvedValue([makeOrder()]);
+
+      const service = new OrdersService();
+      const expired = await service.expireStalePendingOrders(new Date('2025-01-05T00:00:00Z'));
+
+      expect(expired).toBe(1);
+      expect(mockedPrisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: 'PENDING',
+            paymentIntentId: null,
+            createdAt: { lt: expect.any(Date) },
+          }),
+        }),
+      );
+      expect(mockedPrisma.order.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'order-1', status: 'PENDING', paymentIntentId: null },
+          data: { status: 'CANCELLED' },
+        }),
+      );
+      expect(mockedPrisma.product.update).toHaveBeenCalledWith({
+        where: { id: 'prod-1' },
+        data: { stock: { increment: 2 } },
+      });
+    });
+
+    it('does not expire an order claimed by another worker', async () => {
+      mockedPrisma.order.findMany.mockResolvedValue([makeOrder()]);
+      mockedPrisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+      const expired = await new OrdersService().expireStalePendingOrders();
+
+      expect(expired).toBe(0);
+      expect(mockedPrisma.product.update).not.toHaveBeenCalled();
+    });
+  });
+
   // ─── listAllOrders ─────────────────────────────────────────────────────────
 
   describe('listAllOrders', () => {

@@ -153,6 +153,7 @@ export class CartService {
                 name: true,
                 imageUrl: true,
                 stock: true,
+                priceInCents: true,
               },
             },
           },
@@ -164,8 +165,10 @@ export class CartService {
       throw new NotFoundException('Cart not found');
     }
 
+    // Always price the cart from the current product price so the storefront,
+    // checkout, and payment intents all agree after an admin price change.
     const subtotalInCents = cart.items.reduce(
-      (sum, item) => sum + item.unitPriceInCents * item.quantity,
+      (sum, item) => sum + item.product.priceInCents * item.quantity,
       0,
     );
 
@@ -178,8 +181,8 @@ export class CartService {
         id: item.id,
         productId: item.productId,
         quantity: item.quantity,
-        unitPriceInCents: item.unitPriceInCents,
-        lineTotalInCents: item.unitPriceInCents * item.quantity,
+        unitPriceInCents: item.product.priceInCents,
+        lineTotalInCents: item.product.priceInCents * item.quantity,
         product: item.product,
       })),
       updatedAt: cart.updatedAt,
@@ -268,6 +271,7 @@ export class CartService {
           select: {
             stock: true,
             isActive: true,
+            priceInCents: true,
           },
         },
       },
@@ -283,7 +287,7 @@ export class CartService {
 
     await prisma.cartItem.update({
       where: { id: item.id },
-      data: { quantity },
+      data: { quantity, unitPriceInCents: item.product.priceInCents },
     });
 
     return this.buildCartResponse(cart.id);
