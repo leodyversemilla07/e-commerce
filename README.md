@@ -9,7 +9,7 @@ A full-stack e-commerce application built as a monorepo — product catalog, sho
 ### Frontend (`apps/web`)
 | Technology | Version |
 |---|---|
-| Next.js | 16.1.6 |
+| Next.js | 16.4.3 |
 | React | 19.2.4 |
 | TypeScript | 5.9.3 |
 | Tailwind CSS | 4.1.18 |
@@ -17,24 +17,24 @@ A full-stack e-commerce application built as a monorepo — product catalog, sho
 | TanStack Query | 5.97.0 |
 | Zustand | 5.0.12 |
 | Recharts | 3.8.1 |
-| BetterAuth | 1.6.2 |
+| BetterAuth | 1.7.12 |
 | Sonner | 2.0.7 |
 
 ### Backend (`apps/api`)
 | Technology | Version |
 |---|---|
-| NestJS | 11.1.6 |
-| Prisma | 7.7.0 |
+| NestJS | 11.2.8 |
+| Prisma | 7.8.0 |
 | PostgreSQL | — |
-| Express | 5.2.1 |
+| Express | 5.3.0 |
 | Stripe | 22.0.1 |
-| BetterAuth | 1.6.2 |
+| BetterAuth | 1.7.12 |
 
 ### Tooling
 | Tool | Version |
 |---|---|
 | pnpm | 12.15.0 |
-| Turborepo | 2.8.17 |
+| Turborepo | 2.11.10 |
 | Biome | 1.9.4 |
 
 ## Features
@@ -51,11 +51,12 @@ A full-stack e-commerce application built as a monorepo — product catalog, sho
 - Order management with status updates
 - Product CRUD (create, edit, feature, deactivate, delete)
 - Stock management (inventory is reserved at checkout and restored on eligible cancellations; paid orders cannot be cancelled until a refund workflow exists)
+- Unconfirmed cash-on-delivery orders expire after 48 hours and their stock is restored automatically
 
 **Auth**
 - Email/password authentication via BetterAuth
 - Session-based auth with middleware protection
-- Admin password gate for admin routes
+- Auth endpoint rate limiting and an admin password gate with login throttling
 
 **UX**
 - Responsive design (mobile + desktop)
@@ -70,6 +71,8 @@ e-commerce/
 │   ├── web/          # Next.js 16 frontend
 │   └── api/          # NestJS 11 backend
 ├── packages/
+│   ├── env/          # Shared, validated environment schemas
+│   ├── pricing/      # Shared tax and shipping calculations
 │   └── ui/           # Shared shadcn/ui components
 ├── turbo.json        # Turborepo config
 └── package.json      # Root workspace
@@ -93,13 +96,18 @@ Required keys:
 - ADMIN_API_SECRET (separate 32+ character secret shared by API and web servers)
 - PORT (API port; default 4000)
 
-Email (password reset):
-- RESEND_API_KEY — get a free key at https://resend.com. Omit only in local dev to log reset links; production password resets fail closed without it.
-- RESEND_FROM_EMAIL — must be a verified sender in your Resend account (e.g. no-reply@yourdomain.com)
+Email (order confirmations and password reset):
+- RESEND_API_KEY — get a free key at https://resend.com. Omit only in local dev; production requires it.
+- RESEND_FROM_EMAIL — must be a verified sender in your Resend account (e.g. no-reply@yourdomain.com). Required in production.
 
 Payments:
-- PAYMENT_PROVIDER=mock for local/demo (never treat mock payments as real money)
+- PAYMENT_PROVIDER=mock for local/demo only. Production configuration rejects mock payments.
 - PAYMENT_PROVIDER=stripe requires STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET. **Do not enable for live sales yet:** both the storefront and payment-intent API disable card checkout in Stripe mode until a Stripe Elements flow and payment/order reconciliation are implemented.
+
+Production configuration:
+- Set `NODE_ENV=production` before validating or starting the apps.
+- Production rejects placeholder secrets (`change-me`, `admin123`, etc.) and requires `RESEND_API_KEY` and `RESEND_FROM_EMAIL`.
+- Run `pnpm run validate:env` to validate the API and web environment together. The repository CI uses mock payments without `NODE_ENV=production`, so it does not require live email credentials.
 
 ## Quick Start
 
@@ -108,9 +116,11 @@ Payments:
 pnpm install
 
 # Set up environment
-cp .env.example .env
 cp .env.example apps/api/.env
 cp .env.example apps/web/.env.local
+
+# Validate configuration
+pnpm run validate:env
 
 # Set up database
 pnpm --dir apps/api run db:migrate
