@@ -16,19 +16,19 @@ type OrderSummary = {
   createdAt: string
 }
 
-async function getRecentOrders(): Promise<OrderSummary[]> {
+async function getRecentOrders(): Promise<{ items: OrderSummary[]; failed: boolean }> {
   try {
     const res = await adminServerFetch('orders')
-    if (!res.ok) return []
+    if (!res.ok) return { items: [], failed: true }
     const data = (await res.json()) as { items: OrderSummary[] }
-    return (data.items ?? []).slice(0, 5)
+    return { items: (data.items ?? []).slice(0, 5), failed: false }
   } catch {
-    return []
+    return { items: [], failed: true }
   }
 }
 
 export default async function AdminDashboardPage() {
-  const recentOrders = await getRecentOrders()
+  const { items: recentOrders, failed: recentOrdersFailed } = await getRecentOrders()
 
   return (
     <div className="space-y-8">
@@ -52,7 +52,11 @@ export default async function AdminDashboardPage() {
           </Link>
         </CardHeader>
         <CardContent>
-          {recentOrders.length === 0 ? (
+          {recentOrdersFailed ? (
+            <p className="text-sm text-muted-foreground">
+              Unable to load recent orders. Please refresh the page to try again.
+            </p>
+          ) : recentOrders.length === 0 ? (
             <p className="text-sm text-muted-foreground">No orders yet.</p>
           ) : (
             <div className="space-y-3">

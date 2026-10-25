@@ -2,7 +2,11 @@ import { formatPHP } from "./catalog"
 import { adminServerFetch } from './admin-api'
 
 function apiBaseURL() {
-  return process.env.NEXT_PUBLIC_AUTH_BASE_URL ?? `${window.location.protocol}//${window.location.hostname}:4000`
+  if (process.env.NEXT_PUBLIC_AUTH_BASE_URL) return process.env.NEXT_PUBLIC_AUTH_BASE_URL
+  if (typeof window !== "undefined") {
+    return `${window.location.protocol}//${window.location.hostname}:4000`
+  }
+  return process.env.BETTER_AUTH_URL ?? "http://localhost:4000"
 }
 
 function adminFetch(path: string, init: RequestInit = {}) {
@@ -67,6 +71,16 @@ export type OrderDetail = {
 
 async function parseJSON<T>(response: Response): Promise<T> {
   return (await response.json()) as T
+}
+
+export class AdminApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+    this.name = 'AdminApiError'
+  }
 }
 
 export async function getOrders(): Promise<OrdersListResponse> {
@@ -213,7 +227,7 @@ export async function adminGetProduct(productId: string): Promise<AdminProduct> 
   })
 
   if (!response.ok) {
-    throw new Error("Failed to fetch product")
+    throw new AdminApiError("Failed to fetch product", response.status)
   }
 
   return parseJSON<AdminProduct>(response)
@@ -277,7 +291,7 @@ export async function adminGetOrderById(orderId: string): Promise<OrderDetail> {
   })
 
   if (!response.ok) {
-    throw new Error("Failed to fetch order")
+    throw new AdminApiError("Failed to fetch order", response.status)
   }
 
   return parseJSON<OrderDetail>(response)

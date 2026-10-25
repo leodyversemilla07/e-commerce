@@ -3,7 +3,7 @@ import { notFound } from "next/navigation"
 
 import { AdminStatusUpdater } from "@/components/admin-status-updater"
 import { formatPHP } from "@/lib/catalog"
-import { adminGetOrderById, formatOrderStatus, getOrderStatusVariant, type OrderDetail } from "@/lib/orders"
+import { AdminApiError, adminGetOrderById, formatOrderStatus, getOrderStatusVariant, type OrderDetail } from "@/lib/orders"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
@@ -18,8 +18,9 @@ export default async function AdminOrderDetailPage({ params }: AdminOrderDetailP
   let order: OrderDetail
   try {
     order = await adminGetOrderById(id)
-  } catch {
-    notFound()
+  } catch (error) {
+    if (error instanceof AdminApiError && error.status === 404) notFound()
+    throw error
   }
 
   return (

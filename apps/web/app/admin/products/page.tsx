@@ -20,14 +20,26 @@ type ProductItem = {
   createdAt: string
 }
 
-async function getProducts(): Promise<ProductItem[]> {
+async function getProducts(): Promise<{ items: ProductItem[]; failed: boolean }> {
   try {
-    const res = await adminServerFetch('products')
-    if (!res.ok) return []
-    const data = (await res.json()) as { items: ProductItem[] }
-    return data.items
+    const items: ProductItem[] = []
+    let cursor: string | null = null
+    let pages = 0
+    do {
+      const path: string = cursor
+        ? `products?limit=100&cursor=${encodeURIComponent(cursor)}`
+        : 'products?limit=100'
+      const res: Response = await adminServerFetch(path)
+      if (!res.ok) return { items: [], failed: true }
+      const data = (await res.json()) as { items: ProductItem[]; nextCursor?: string | null }
+      items.push(...data.items)
+      if (data.nextCursor && data.nextCursor === cursor) return { items, failed: true }
+      cursor = data.nextCursor ?? null
+      pages += 1
+    } while (cursor && pages < 100)
+    return { items, failed: false }
   } catch {
-    return []
+    return { items: [], failed: true }
   }
 }
 
@@ -40,7 +52,7 @@ export default async function AdminProductsPage({ searchParams }: AdminProductsP
   const query = params.q?.toLowerCase() ?? ""
   const filter = params.filter ?? ""
 
-  const allProducts = await getProducts()
+  const { items: allProducts, failed: loadFailed } = await getProducts()
 
   const products = allProducts.filter((p) => {
     const matchesQuery =
@@ -97,7 +109,18 @@ export default async function AdminProductsPage({ searchParams }: AdminProductsP
         </div>
       </div>
 
-      {products.length === 0 ? (
+      {loadFailed ? (
+        <Card>
+          <CardContent className="space-y-4 pt-6">
+            <p className="text-sm text-muted-foreground">
+              Unable to load products. The API may be unavailable.
+            </p>
+            <Button asChild variant="outline">
+              <Link href="/admin/products">Retry</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      ) : products.length === 0 ? (
         <Card>
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground">

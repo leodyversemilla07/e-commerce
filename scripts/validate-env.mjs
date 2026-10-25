@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import apiConfig from '@workspace/env/api'
 import webConfig from '@workspace/env/web'
 
-const { parseApiEnv, apiEnvWarnings } = apiConfig
+const { parseApiEnv } = apiConfig
 const { parseWebServerEnv } = webConfig
 const args = new Map(process.argv.slice(2).map((arg) => arg.replace(/^--/, '').split('=')))
 const service = args.get('service') ?? 'all'
@@ -40,14 +40,8 @@ let failed = false
 for (const target of targets) {
   loadServiceEnv(target)
   try {
-    const parsed = target === 'api'
-      ? parseApiEnv(process.env, mode)
-      : parseWebServerEnv(process.env, mode)
-    if (target === 'api') {
-      for (const warning of apiEnvWarnings(parsed, mode)) {
-        console.warn(`[env:${target}] warning: ${warning}`)
-      }
-    }
+    if (target === 'api') parseApiEnv(process.env, mode)
+    else parseWebServerEnv(process.env, mode)
     console.log(`[env:${target}] ok`)
   } catch (error) {
     failed = true

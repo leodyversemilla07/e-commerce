@@ -34,15 +34,18 @@ function OrdersViewSkeleton() {
 export function OrdersView() {
   const [orders, setOrders] = useState<OrdersListItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     const load = async () => {
       setLoading(true)
+      setError(false)
       try {
         const data = await getOrders()
         setOrders(data.items)
       } catch {
         setOrders([])
+        setError(true)
       } finally {
         setLoading(false)
       }
@@ -53,6 +56,21 @@ export function OrdersView() {
 
   if (loading) {
     return <OrdersViewSkeleton />
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Unable to load orders</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Please refresh the page to try again.
+          </p>
+        </CardContent>
+      </Card>
+    )
   }
 
   if (orders.length === 0) {

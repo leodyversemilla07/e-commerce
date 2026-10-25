@@ -12,7 +12,6 @@ export const apiSchema = sharedServerSchema.extend({
   STRIPE_WEBHOOK_SECRET: z.string().trim().optional(),
   RESEND_API_KEY: z.string().trim().optional(),
   RESEND_FROM_EMAIL: z.string().trim().email().optional(),
-  REQUIRE_EMAIL: z.enum(['true', 'false']).default('false'),
 });
 
 export type ApiEnv = z.infer<typeof apiSchema>;
@@ -34,21 +33,24 @@ export function parseApiEnv(raw: NodeJS.ProcessEnv, mode = raw.NODE_ENV ?? 'deve
         if (!env[key]) context.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: 'required for Stripe' });
       }
     }
-    if (env.REQUIRE_EMAIL === 'true') {
+    if (mode === 'production') {
+      rejectDemoSecrets(env, context);
+      if (env.PAYMENT_PROVIDER === 'mock') {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['PAYMENT_PROVIDER'],
+          message: 'mock payments are not allowed in production',
+        });
+      }
       for (const key of ['RESEND_API_KEY', 'RESEND_FROM_EMAIL'] as const) {
-        if (!env[key]) context.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: 'required when REQUIRE_EMAIL=true' });
+        if (!env[key]) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: 'required in production for order and password-reset email',
+          });
+        }
       }
     }
-    if (mode === 'production') rejectDemoSecrets(env, context);
   }).parse(raw);
-}
-
-export function apiEnvWarnings(env: ApiEnv, mode = 'development'): string[] {
-  if (mode !== 'production') return [];
-  const warnings: string[] = [];
-  if (env.PAYMENT_PROVIDER === 'mock') warnings.push('PAYMENT_PROVIDER is mock in production');
-  if (!env.RESEND_API_KEY || !env.RESEND_FROM_EMAIL) {
-    warnings.push('RESEND_API_KEY/RESEND_FROM_EMAIL are missing; password reset will be unavailable in production');
-  }
-  return warnings;
 }

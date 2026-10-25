@@ -21,6 +21,7 @@ import {
   ChartTooltipContent,
   ChartLegendContent,
 } from "@workspace/ui/components/chart"
+import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 
@@ -64,7 +65,10 @@ function formatPHP(cents: number): string {
 }
 
 function formatShortDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString("en-PH", { month: "short", day: "numeric" })
+  // Date-only strings are parsed as UTC by the Date constructor; treat the
+  // server's local calendar day as local to avoid an off-by-one label.
+  const date = new Date(/^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? `${dateStr}T00:00:00` : dateStr)
+  return date.toLocaleDateString("en-PH", { month: "short", day: "numeric" })
 }
 
 function ChartSkeleton() {
@@ -87,27 +91,28 @@ export function AdminCharts() {
   const [topProducts, setTopProducts] = useState<TopProduct[]>([])
   const [revenueByCategory, setRevenueByCategory] = useState<RevenueByCategory[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     async function fetchData() {
       try {
-        const [overviewRes, revenueRes, statusRes, productsRes, categoryRes] =
-          await Promise.all([
-            fetch("/api/admin/analytics/overview"),
-            fetch("/api/admin/analytics/revenue-by-day?days=30"),
-            fetch("/api/admin/analytics/orders-by-status"),
-            fetch("/api/admin/analytics/top-products?limit=5"),
-            fetch("/api/admin/analytics/revenue-by-category"),
-          ])
+        const responses = await Promise.all([
+          fetch("/api/admin/analytics/overview"),
+          fetch("/api/admin/analytics/revenue-by-day?days=30"),
+          fetch("/api/admin/analytics/orders-by-status"),
+          fetch("/api/admin/analytics/top-products?limit=5"),
+          fetch("/api/admin/analytics/revenue-by-category"),
+        ])
 
         const [overviewData, revenueData, statusData, productsData, categoryData] =
-          await Promise.all([
-            overviewRes.json(),
-            revenueRes.json(),
-            statusRes.json(),
-            productsRes.json(),
-            categoryRes.json(),
-          ])
+          await Promise.all(
+            responses.map(async (response) => {
+              if (!response.ok) {
+                throw new Error(`Analytics request failed (${response.status})`)
+              }
+              return response.json()
+            }),
+          )
 
         setOverview(overviewData)
         setRevenueByDay(revenueData)
@@ -116,6 +121,7 @@ export function AdminCharts() {
         setRevenueByCategory(categoryData)
       } catch (err) {
         console.error("Failed to fetch analytics:", err)
+        setError("Unable to load analytics. Please refresh the page and try again.")
       } finally {
         setLoading(false)
       }
@@ -146,6 +152,22 @@ export function AdminCharts() {
           <ChartSkeleton />
         </div>
       </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Analytics unavailable</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">{error}</p>
+          <Button variant="outline" onClick={() => window.location.reload()}>
+            Retry
+          </Button>
+        </CardContent>
+      </Card>
     )
   }
 

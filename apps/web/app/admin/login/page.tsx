@@ -31,7 +31,11 @@ export default function AdminLoginPage() {
       }
 
       toast.success("Authenticated")
-      const redirect = searchParams.get("redirect") || "/admin"
+      const requested = searchParams.get("redirect")
+      const redirect =
+        requested && /^\/admin(?:[/?#]|$)/.test(requested) && !requested.includes("\\")
+          ? requested
+          : "/admin"
       router.push(redirect)
       router.refresh()
     } catch {
@@ -62,9 +66,6 @@ export default function AdminLoginPage() {
               {loading ? "Authenticating..." : "Sign In"}
             </Button>
           </form>
-          <p className="mt-4 text-center text-xs text-muted-foreground">
-            Demo password: admin123
-          </p>
         </CardContent>
       </Card>
     </main>

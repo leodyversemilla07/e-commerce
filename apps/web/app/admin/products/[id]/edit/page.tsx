@@ -2,7 +2,7 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 
 import { AdminEditProductForm } from "@/components/admin-edit-product-form"
-import { adminGetProduct, adminListCategories, type AdminProduct } from "@/lib/orders"
+import { AdminApiError, adminGetProduct, adminListCategories, type AdminProduct } from "@/lib/orders"
 import { Button } from "@workspace/ui/components/button"
 
 type EditProductPageProps = {
@@ -15,8 +15,9 @@ export default async function EditProductPage({ params }: EditProductPageProps) 
   let product: AdminProduct
   try {
     product = await adminGetProduct(id)
-  } catch {
-    notFound()
+  } catch (error) {
+    if (error instanceof AdminApiError && error.status === 404) notFound()
+    throw error
   }
 
   const categories = await adminListCategories()

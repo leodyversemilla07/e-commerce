@@ -19,19 +19,25 @@ type OrderItem = {
   createdAt: string
 }
 
-async function getOrders(): Promise<OrderItem[]> {
-  const items: OrderItem[] = []
-  let cursor: string | null = null
-  do {
-    const path: string = cursor ? `orders?limit=100&cursor=${encodeURIComponent(cursor)}` : 'orders?limit=100'
-    const res: Response = await adminServerFetch(path)
-    if (!res.ok) throw new Error('Failed to fetch admin orders')
-    const page: { items: OrderItem[]; nextCursor: string | null } = await res.json()
-    items.push(...page.items)
-    if (page.nextCursor && page.nextCursor === cursor) throw new Error('Admin order pagination did not advance')
-    cursor = page.nextCursor
-  } while (cursor)
-  return items
+async function getOrders(): Promise<{ items: OrderItem[]; failed: boolean }> {
+  try {
+    const items: OrderItem[] = []
+    let cursor: string | null = null
+    let pages = 0
+    do {
+      const path: string = cursor ? `orders?limit=100&cursor=${encodeURIComponent(cursor)}` : 'orders?limit=100'
+      const res: Response = await adminServerFetch(path)
+      if (!res.ok) return { items: [], failed: true }
+      const page: { items: OrderItem[]; nextCursor: string | null } = await res.json()
+      items.push(...page.items)
+      if (page.nextCursor && page.nextCursor === cursor) return { items, failed: true }
+      cursor = page.nextCursor
+      pages += 1
+    } while (cursor && pages < 100)
+    return { items, failed: false }
+  } catch {
+    return { items: [], failed: true }
+  }
 }
 
 type AdminOrdersPageProps = {
@@ -43,7 +49,7 @@ export default async function AdminOrdersPage({ searchParams }: AdminOrdersPageP
   const query = params.q?.toLowerCase() ?? ""
   const statusFilter = params.status ?? ""
 
-  const allOrders = await getOrders()
+  const { items: allOrders, failed: loadFailed } = await getOrders()
 
   const orders = allOrders.filter((order) => {
     const matchesQuery =
@@ -105,7 +111,21 @@ export default async function AdminOrdersPage({ searchParams }: AdminOrdersPageP
         </div>
       </div>
 
-      {orders.length === 0 ? (
+      {loadFailed ? (
+        <Card>
+          <CardContent className="space-y-4 pt-6">
+            <p className="text-sm text-muted-foreground">
+              Unable to load orders. The API may be unavailable.
+            </p>
+            <Link
+              href="/admin/orders"
+              className="text-sm font-medium underline underline-offset-4"
+            >
+              Retry
+            </Link>
+          </CardContent>
+        </Card>
+      ) : orders.length === 0 ? (
         <Card>
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground">

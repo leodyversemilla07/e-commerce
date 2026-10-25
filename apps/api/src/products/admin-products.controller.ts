@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
@@ -8,20 +9,34 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
 import { prisma } from '../prisma';
 import { AdminApiGuard } from '../admin/admin-api.guard';
 
+function isUniqueConstraintError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'P2002');
+}
+
 @AllowAnonymous()
 @UseGuards(AdminApiGuard)
 @Controller('admin/products')
 export class AdminProductsController {
   @Get()
-  async listAllProducts() {
+  async listAllProducts(
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+  ) {
+    const parsedLimit = limit ? Number(limit) : 20;
+    if (!Number.isSafeInteger(parsedLimit) || parsedLimit < 1) {
+      throw new BadRequestException('limit must be a positive integer');
+    }
+    const take = Math.min(parsedLimit, 100);
+
     const products = await prisma.product.findMany({
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       select: {
         id: true,
         name: true,
@@ -33,8 +48,18 @@ export class AdminProductsController {
         category: { select: { name: true, slug: true } },
         createdAt: true,
       },
+      take: take + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
-    return { items: products, count: products.length };
+
+    const hasMore = products.length > take;
+    const page = hasMore ? products.slice(0, take) : products;
+
+    return {
+      items: page,
+      count: page.length,
+      nextCursor: hasMore ? page[page.length - 1].id : null,
+    };
   }
 
   @Get('categories')
@@ -93,31 +118,42 @@ export class AdminProductsController {
         !Number.isSafeInteger(body.stock ?? 0) || (body.stock ?? 0) < 0) {
       throw new BadRequestException('Price and stock must be non-negative integers');
     }
-    const product = await prisma.product.create({
-      data: {
-        name: body.name,
-        slug: body.slug,
-        description: body.description,
-        priceInCents: body.priceInCents,
-        stock: body.stock ?? 0,
-        imageUrl: body.imageUrl ?? null,
-        isFeatured: body.isFeatured ?? false,
-        isActive: body.isActive ?? true,
-        categoryId: body.categoryId,
-      },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        priceInCents: true,
-        stock: true,
-        isFeatured: true,
-        isActive: true,
-        category: { select: { name: true, slug: true } },
-        createdAt: true,
-      },
-    });
-    return product;
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    const slug = typeof body.slug === 'string' ? body.slug.trim() : '';
+    if (!name || !slug || !body.categoryId) {
+      throw new BadRequestException('Name, slug, and category are required');
+    }
+    try {
+      return await prisma.product.create({
+        data: {
+          name,
+          slug,
+          description: typeof body.description === 'string' ? body.description.trim() : '',
+          priceInCents: body.priceInCents,
+          stock: body.stock ?? 0,
+          imageUrl: body.imageUrl ?? null,
+          isFeatured: body.isFeatured ?? false,
+          isActive: body.isActive ?? true,
+          categoryId: body.categoryId,
+        },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          priceInCents: true,
+          stock: true,
+          isFeatured: true,
+          isActive: true,
+          category: { select: { name: true, slug: true } },
+          createdAt: true,
+        },
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new ConflictException('A product with this slug already exists');
+      }
+      throw error;
+    }
   }
 
   @Patch(':id')
@@ -140,33 +176,43 @@ export class AdminProductsController {
         (body.stock !== undefined && (!Number.isSafeInteger(body.stock) || body.stock < 0))) {
       throw new BadRequestException('Price and stock must be non-negative integers');
     }
-    const product = await prisma.product.update({
-      where: { id },
-      data: {
-        ...(body.name !== undefined && { name: body.name }),
-        ...(body.slug !== undefined && { slug: body.slug }),
-        ...(body.description !== undefined && { description: body.description }),
-        ...(body.priceInCents !== undefined && { priceInCents: body.priceInCents }),
-        ...(body.imageUrl !== undefined && { imageUrl: body.imageUrl }),
-        ...(body.categoryId !== undefined && { categoryId: body.categoryId }),
-        ...(body.isFeatured !== undefined && { isFeatured: body.isFeatured }),
-        ...(body.isActive !== undefined && { isActive: body.isActive }),
-        ...(body.stock !== undefined && { stock: body.stock }),
-      },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        description: true,
-        priceInCents: true,
-        stock: true,
-        imageUrl: true,
-        isFeatured: true,
-        isActive: true,
-        category: { select: { id: true, name: true, slug: true } },
-      },
-    });
-    return product;
+    const name = body.name?.trim();
+    const slug = body.slug?.trim();
+    if (body.name !== undefined && !name) throw new BadRequestException('Name is required');
+    if (body.slug !== undefined && !slug) throw new BadRequestException('Slug is required');
+    try {
+      return await prisma.product.update({
+        where: { id },
+        data: {
+          ...(name !== undefined && { name }),
+          ...(slug !== undefined && { slug }),
+          ...(body.description !== undefined && { description: body.description.trim() }),
+          ...(body.priceInCents !== undefined && { priceInCents: body.priceInCents }),
+          ...(body.imageUrl !== undefined && { imageUrl: body.imageUrl }),
+          ...(body.categoryId !== undefined && { categoryId: body.categoryId }),
+          ...(body.isFeatured !== undefined && { isFeatured: body.isFeatured }),
+          ...(body.isActive !== undefined && { isActive: body.isActive }),
+          ...(body.stock !== undefined && { stock: body.stock }),
+        },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          description: true,
+          priceInCents: true,
+          stock: true,
+          imageUrl: true,
+          isFeatured: true,
+          isActive: true,
+          category: { select: { id: true, name: true, slug: true } },
+        },
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new ConflictException('A product with this slug already exists');
+      }
+      throw error;
+    }
   }
 
   @Delete(':id')

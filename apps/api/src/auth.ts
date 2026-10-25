@@ -23,8 +23,12 @@ async function sendPasswordResetEmail(email: string, url: string): Promise<void>
   }
 
   const from = apiEnv.RESEND_FROM_EMAIL;
-  if (!from && process.env.NODE_ENV === 'production') {
-    throw new Error('RESEND_FROM_EMAIL is required in production');
+  if (!from) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('RESEND_FROM_EMAIL is required in production');
+    }
+    console.log(`[auth] password-reset email is not configured; skipping email for ${email}`);
+    return;
   }
 
   const response = await fetch('https://api.resend.com/emails', {
@@ -34,7 +38,7 @@ async function sendPasswordResetEmail(email: string, url: string): Promise<void>
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: from ?? 'no-reply@leodyversemilla07.com',
+      from,
       to: [email],
       subject: 'Reset your password',
       html: `
@@ -60,6 +64,17 @@ export const auth = betterAuth({
     enabled: true,
     sendResetPassword: async ({ user, url }) => {
       await sendPasswordResetEmail(user.email, url);
+    },
+  },
+  rateLimit: {
+    enabled: true,
+    window: 60,
+    max: 100,
+    customRules: {
+      '/sign-in/email': { window: 60, max: 5 },
+      '/sign-up/email': { window: 60, max: 5 },
+      '/request-password-reset': { window: 60, max: 3 },
+      '/reset-password': { window: 60, max: 5 },
     },
   },
   trustedOrigins: apiEnv.BETTER_AUTH_TRUSTED_ORIGINS.split(',').map((s) => s.trim()),
