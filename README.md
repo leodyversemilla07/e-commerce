@@ -97,17 +97,12 @@ Required keys:
 - PORT (API port; default 4000)
 
 Email (order confirmations and password reset):
-- RESEND_API_KEY — get a free key at https://resend.com. Omit only in local dev; production requires it.
-- RESEND_FROM_EMAIL — must be a verified sender in your Resend account (e.g. no-reply@yourdomain.com). Required in production.
+- RESEND_API_KEY — get a free key at https://resend.com. Omit in local development to log password-reset links and skip order confirmation emails.
+- RESEND_FROM_EMAIL — a verified sender address in your Resend account (e.g. no-reply@yourdomain.com).
 
 Payments:
-- PAYMENT_PROVIDER=mock for local/demo only. Production configuration rejects mock payments.
+- PAYMENT_PROVIDER=mock for local development and demos.
 - PAYMENT_PROVIDER=stripe requires STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET. **Do not enable for live sales yet:** both the storefront and payment-intent API disable card checkout in Stripe mode until a Stripe Elements flow and payment/order reconciliation are implemented.
-
-Production configuration:
-- Set `NODE_ENV=production` before validating or starting the apps.
-- Production rejects placeholder secrets (`change-me`, `admin123`, etc.) and requires `RESEND_API_KEY` and `RESEND_FROM_EMAIL`.
-- Run `pnpm run validate:env` to validate the API and web environment together. The repository CI uses mock payments without `NODE_ENV=production`, so it does not require live email credentials.
 
 ## Quick Start
 
@@ -134,7 +129,7 @@ pnpm run dev:all
 - Frontend: http://localhost:3000
 - API: http://localhost:4000
 
-### Temporary local SQLite (no PostgreSQL/Docker needed)
+### Temporary local SQLite (no PostgreSQL server needed)
 
 The schema and migrations are **PostgreSQL-only**. SQLite uses a derived local-only schema and `db push`; do not apply PostgreSQL migrations to it. SQLite tests do not replace PostgreSQL-specific concurrency/migration tests.
 
