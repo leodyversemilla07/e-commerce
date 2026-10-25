@@ -142,7 +142,33 @@ async function main() {
       body: JSON.stringify({ status: 'CANCELLED' }),
     }, 200)
     assert.equal((await call(`/products/${product.slug}`)).body.stock, product.stock - 1)
-    console.log('SQLite HTTP integration passed: sessions, admin guard, cart, payment, checkout, cancellation, stock and ownership')
+
+    // A shared browser must not expose one account's orders or cart to the
+    // next account through the lingering guest cookie.
+    await call('/cart/items', {
+      method: 'POST', headers: { cookie: sessionCookie },
+      body: JSON.stringify({ productId: product.id, quantity: 1 }),
+    }, 201)
+    const accountCart = await call('/cart', { headers: { cookie: sessionCookie } })
+    assert.equal(accountCart.body.itemCount, 1)
+
+    const otherEmail = `sqlite-other-${Date.now()}@example.com`
+    const otherSignUp = await call('/api/auth/sign-up/email', {
+      method: 'POST', headers: { origin: 'http://localhost:3000' },
+      body: JSON.stringify({ name: 'Other User', email: otherEmail, password: 'temporary-test-password-456' }),
+    })
+    assert.equal(otherSignUp.body.user.email, otherEmail)
+    const otherSessionCookie = otherSignUp.response.headers.getSetCookie()
+      .find((value) => value.includes('session_token='))?.split(';')[0]
+    assert.ok(otherSessionCookie, 'Expected Better Auth to issue a second session cookie')
+
+    const otherHeaders = { cookie: `${cookie}; ${otherSessionCookie}` }
+    const otherOrders = await call('/orders', { headers: otherHeaders })
+    assert.ok(!otherOrders.body.items.some((item) => item.id === order.body.id), 'Guest order leaked to another account')
+    const otherCart = await call('/cart', { headers: otherHeaders })
+    assert.equal(otherCart.body.itemCount, 0, 'Previous account cart leaked to another account')
+
+    console.log('SQLite HTTP integration passed: sessions, admin guard, cart, payment, checkout, cancellation, stock, ownership and guest isolation')
   } finally {
     if (server) {
       server.kill()

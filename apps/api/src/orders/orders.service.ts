@@ -10,12 +10,20 @@ const PENDING_COD_ORDER_TTL_MS = 48 * 60 * 60 * 1000;
 @Injectable()
 export class OrdersService {
   private whereForIdentity(identity: OrdersRequestIdentity) {
-    return {
-      OR: [
-        identity.userId ? { userId: identity.userId } : undefined,
-        { guestId: identity.guestId },
-      ].filter(Boolean) as { userId?: string; guestId?: string }[],
-    };
+    if (identity.userId) {
+      // Never union an authenticated lookup with the browser's guest id: the
+      // cookie can outlive the account that created it and expose another
+      // person's order PII on a shared browser.
+      return { userId: identity.userId };
+    }
+
+    if (identity.guestId) {
+      // Guest orders must also be unowned. Rows written by the old code can
+      // carry both ids; those belong to the account, not the browser.
+      return { guestId: identity.guestId, userId: null };
+    }
+
+    return { id: '__no_identity__' };
   }
 
   async listOrders(

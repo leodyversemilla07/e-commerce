@@ -118,13 +118,19 @@ export class CheckoutService {
   constructor(private readonly paymentsService: PaymentsService) {}
 
   private async getActiveCart(identity: CheckoutRequestIdentity) {
+    const scope = identity.userId
+      ? { userId: identity.userId }
+      : identity.guestId
+        ? { guestId: identity.guestId, userId: null }
+        : null
+    if (!scope) {
+      throw new BadRequestException("Cart is empty")
+    }
+
     const cart = await prisma.cart.findFirst({
       where: {
         status: "active",
-        OR: [
-          identity.userId ? { userId: identity.userId } : undefined,
-          { guestId: identity.guestId },
-        ].filter(Boolean) as { userId?: string; guestId?: string }[],
+        ...scope,
       },
       orderBy: { updatedAt: "desc" },
       include: {
@@ -226,7 +232,9 @@ export class CheckoutService {
       const createdOrder = await tx.order.create({
         data: {
           userId: identity.userId,
-          guestId: identity.guestId,
+          // Signed-in orders are account-scoped only. A browser guest id must
+          // never remain attached to them after the account signs out.
+          guestId: identity.userId ? null : identity.guestId,
           status: paymentIntentId ? 'CONFIRMED' : 'PENDING',
           customerEmail: normalize(payload.customerEmail),
           customerName: normalize(payload.customerName),
@@ -278,7 +286,7 @@ export class CheckoutService {
       await tx.cart.create({
         data: {
           userId: identity.userId,
-          guestId: identity.guestId,
+          guestId: identity.userId ? null : identity.guestId,
           status: "active",
         },
       })

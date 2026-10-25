@@ -7,6 +7,7 @@ jest.mock('../prisma', () => ({
       findFirst: jest.fn(),
       findUnique: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
       create: jest.fn(),
     },
     cartItem: {
@@ -31,6 +32,7 @@ describe('CartService', () => {
       findFirst: jest.Mock;
       findUnique: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
       create: jest.Mock;
     };
     cartItem: {
@@ -69,15 +71,20 @@ describe('CartService', () => {
             .fn()
             .mockResolvedValueOnce({
               id: userCart.id,
+              userId: 'user-1',
+              status: 'active',
               items: [{ id: 'u-item-1', productId: 'prod-1', quantity: 1, unitPriceInCents: 10000 }],
             })
             .mockResolvedValueOnce({
               id: guestCart.id,
+              userId: null,
+              status: 'active',
               items: [
                 { id: 'g-item-1', productId: 'prod-1', quantity: 2, unitPriceInCents: 10000 },
                 { id: 'g-item-2', productId: 'prod-2', quantity: 1, unitPriceInCents: 20000 },
               ],
             }),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           update: jest.fn().mockResolvedValue({}),
         },
         product: {
@@ -129,5 +136,89 @@ describe('CartService', () => {
       where: { id: guestCart.id },
       data: { status: 'merged' },
     });
+    expect(mockedPrisma.cart.findFirst).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: expect.objectContaining({
+          guestId: 'guest-1',
+          userId: null,
+          status: 'active',
+        }),
+      }),
+    );
+  });
+
+  it('does not attach a guest id to a new authenticated cart', async () => {
+    const service = new CartService();
+    mockedPrisma.cart.findFirst.mockResolvedValue(null);
+    mockedPrisma.cart.create.mockResolvedValue({ id: 'cart-new' });
+    mockedPrisma.cart.findUnique.mockResolvedValue({
+      id: 'cart-new',
+      status: 'active',
+      updatedAt: new Date(),
+      items: [],
+    });
+
+    await service.getCart({ userId: 'user-1', guestId: 'guest-1' });
+
+    expect(mockedPrisma.cart.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user-1',
+        guestId: null,
+        status: 'active',
+      },
+    });
+  });
+
+  it('adopts an anonymous guest cart without leaving the guest id attached', async () => {
+    const service = new CartService();
+    const guestCart = {
+      id: 'cart-guest-1',
+      userId: null,
+      guestId: 'guest-1',
+      status: 'active',
+    };
+
+    mockedPrisma.cart.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(guestCart);
+    mockedPrisma.cart.updateMany.mockResolvedValue({ count: 1 });
+    mockedPrisma.cart.findUnique.mockResolvedValue({
+      id: guestCart.id,
+      status: 'active',
+      updatedAt: new Date(),
+      items: [],
+    });
+
+    await service.getCart({ userId: 'user-1', guestId: 'guest-1' });
+
+    expect(mockedPrisma.cart.updateMany).toHaveBeenCalledWith({
+      where: { id: guestCart.id, userId: null, status: 'active' },
+      data: { userId: 'user-1', guestId: null },
+    });
+  });
+
+  it('scopes anonymous carts to unowned guest carts', async () => {
+    const service = new CartService();
+    const guestCart = {
+      id: 'cart-guest-1',
+      userId: null,
+      guestId: 'guest-1',
+      status: 'active',
+    };
+
+    mockedPrisma.cart.findFirst.mockResolvedValue(guestCart);
+    mockedPrisma.cart.findUnique.mockResolvedValue({
+      id: guestCart.id,
+      status: 'active',
+      updatedAt: new Date(),
+      items: [],
+    });
+
+    await service.getCart({ userId: null, guestId: 'guest-1' });
+
+    expect(mockedPrisma.cart.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { status: 'active', guestId: 'guest-1', userId: null },
+      }),
+    );
   });
 });

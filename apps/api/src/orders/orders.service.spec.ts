@@ -128,6 +128,26 @@ describe('OrdersService', () => {
       expect(result.items).toHaveLength(0);
       expect(result.nextCursor).toBeNull();
     });
+
+    it('scopes authenticated reads to userId and ignores a stale guest id', async () => {
+      mockedPrisma.order.findMany.mockResolvedValue([]);
+
+      await new OrdersService().listOrders({ userId: 'user-1', guestId: 'stale-guest' });
+
+      expect(mockedPrisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { userId: 'user-1' } }),
+      );
+    });
+
+    it('scopes guest reads to unowned guest orders', async () => {
+      mockedPrisma.order.findMany.mockResolvedValue([]);
+
+      await new OrdersService().listOrders({ userId: null, guestId: 'guest-1' });
+
+      expect(mockedPrisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { guestId: 'guest-1', userId: null } }),
+      );
+    });
   });
 
   // ─── getOrderById ──────────────────────────────────────────────────────────

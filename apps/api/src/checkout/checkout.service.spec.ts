@@ -141,6 +141,71 @@ describe("CheckoutService", () => {
     expect(txCartCreate).toHaveBeenCalledWith({
       data: {
         userId: "user-1",
+        guestId: null,
+        status: "active",
+      },
+    })
+    expect(txOrderCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ userId: "user-1", guestId: null }),
+      })
+    )
+  })
+
+  it("scopes signed-in checkout to the account cart", async () => {
+    const service = new CheckoutService(paymentsService)
+    setupActiveCart()
+    setupTransactionMocks()
+
+    await service.createPendingOrder(
+      { userId: "user-1", guestId: "guest-1" },
+      {
+        customerEmail: "buyer@example.com",
+        customerName: "Buyer",
+        shippingAddressLine1: "123 Main",
+        city: "Quezon City",
+        province: "Metro Manila",
+        postalCode: "1100",
+      }
+    )
+
+    expect(mockedPrisma.cart.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { status: "active", userId: "user-1" },
+      })
+    )
+  })
+
+  it("scopes anonymous checkout to an unowned guest cart", async () => {
+    const service = new CheckoutService(paymentsService)
+    setupActiveCart()
+    const { txOrderCreate, txCartCreate } = setupTransactionMocks()
+
+    await service.createPendingOrder(
+      { userId: null, guestId: "guest-1" },
+      {
+        customerEmail: "buyer@example.com",
+        customerName: "Buyer",
+        shippingAddressLine1: "123 Main",
+        city: "Quezon City",
+        province: "Metro Manila",
+        postalCode: "1100",
+      }
+    )
+
+    expect(mockedPrisma.cart.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { status: "active", guestId: "guest-1", userId: null },
+      })
+    )
+    expect(txOrderCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ userId: null, guestId: "guest-1" }),
+      })
+    )
+    expect(txCartCreate).toHaveBeenCalledWith({
+      data: {
+        userId: null,
         guestId: "guest-1",
         status: "active",
       },

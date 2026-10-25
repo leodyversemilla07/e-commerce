@@ -7,10 +7,15 @@ import type { CartItemPayload, CartRequestIdentity } from './cart.types';
 export class CartService {
   private async ensureCart(identity: CartRequestIdentity) {
     if (!identity.userId) {
+      if (!identity.guestId) {
+        throw new BadRequestException('Guest cart identity is unavailable');
+      }
+
       const guestCart = await prisma.cart.findFirst({
         where: {
           status: 'active',
           guestId: identity.guestId,
+          userId: null,
         },
         orderBy: { updatedAt: 'desc' },
       });
@@ -34,13 +39,18 @@ export class CartService {
       orderBy: { updatedAt: 'desc' },
     });
 
-    const guestCart = await prisma.cart.findFirst({
-      where: {
-        status: 'active',
-        guestId: identity.guestId,
-      },
-      orderBy: { updatedAt: 'desc' },
-    });
+    // Only anonymous carts may be merged or adopted. Authenticated carts from
+    // another account must never be reachable through a browser cookie.
+    const guestCart = identity.guestId
+      ? await prisma.cart.findFirst({
+          where: {
+            status: 'active',
+            guestId: identity.guestId,
+            userId: null,
+          },
+          orderBy: { updatedAt: 'desc' },
+        })
+      : null;
 
     if (userCart && guestCart && userCart.id !== guestCart.id) {
       await prisma.$transaction(async (tx) => {
@@ -56,6 +66,14 @@ export class CartService {
         ]);
 
         if (!freshUserCart || !freshGuestCart) return;
+        if (freshUserCart.userId !== identity.userId || freshUserCart.status !== 'active') return;
+        if (freshGuestCart.userId !== null || freshGuestCart.status !== 'active') return;
+
+        const claimed = await tx.cart.updateMany({
+          where: { id: freshGuestCart.id, userId: null, status: 'active' },
+          data: { status: 'merging' },
+        });
+        if (claimed.count !== 1) return;
 
         const userItemsByProduct = new Map(freshUserCart.items.map((item) => [item.productId, item]));
         const productIds = Array.from(
@@ -124,16 +142,31 @@ export class CartService {
     if (userCart) return userCart;
 
     if (guestCart) {
-      return prisma.cart.update({
-        where: { id: guestCart.id },
-        data: { userId: identity.userId },
+      const adopted = await prisma.cart.updateMany({
+        where: { id: guestCart.id, userId: null, status: 'active' },
+        data: { userId: identity.userId, guestId: null },
       });
+
+      if (adopted.count === 1) {
+        return { ...guestCart, userId: identity.userId, guestId: null };
+      }
+
+      // Another request may have adopted this cart first. Prefer the current
+      // user's active cart, or create a fresh one below.
+      const racedUserCart = await prisma.cart.findFirst({
+        where: {
+          status: 'active',
+          userId: identity.userId,
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+      if (racedUserCart) return racedUserCart;
     }
 
     return prisma.cart.create({
       data: {
         userId: identity.userId,
-        guestId: identity.guestId,
+        guestId: null,
         status: 'active',
       },
     });

@@ -12,7 +12,9 @@ import {
 import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
 import type { Request, Response } from 'express';
 
+import { clearGuestCartCookie } from '../guest-cart';
 import { CartService } from './cart.service';
+import type { CartRequestIdentity } from './cart.types';
 import { getCartIdentity } from './cart.utils';
 
 type AddItemDto = {
@@ -29,10 +31,18 @@ type UpdateItemQuantityDto = {
 export class CartController {
   constructor(private readonly cartService: CartService) {}
 
+  private consumeGuestCookie(identity: CartRequestIdentity, res: Response): void {
+    if (identity.userId && identity.guestId) {
+      clearGuestCartCookie(res);
+    }
+  }
+
   @Get()
   async getCart(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const identity = getCartIdentity(req, res);
-    return this.cartService.getCart(identity);
+    const cart = await this.cartService.getCart(identity);
+    this.consumeGuestCookie(identity, res);
+    return cart;
   }
 
   @Post('items')
@@ -42,11 +52,12 @@ export class CartController {
     @Body() body: AddItemDto,
   ) {
     const identity = getCartIdentity(req, res);
-
-    return this.cartService.addItem(identity, {
+    const cart = await this.cartService.addItem(identity, {
       productId: body.productId,
       quantity: body.quantity ?? 1,
     });
+    this.consumeGuestCookie(identity, res);
+    return cart;
   }
 
   @Patch('items/:itemId')
@@ -57,7 +68,9 @@ export class CartController {
     @Body() body: UpdateItemQuantityDto,
   ) {
     const identity = getCartIdentity(req, res);
-    return this.cartService.updateItemQuantity(identity, itemId, body.quantity);
+    const cart = await this.cartService.updateItemQuantity(identity, itemId, body.quantity);
+    this.consumeGuestCookie(identity, res);
+    return cart;
   }
 
   @Delete('items/:itemId')
@@ -67,6 +80,8 @@ export class CartController {
     @Param('itemId') itemId: string,
   ) {
     const identity = getCartIdentity(req, res);
-    return this.cartService.removeItem(identity, itemId);
+    const cart = await this.cartService.removeItem(identity, itemId);
+    this.consumeGuestCookie(identity, res);
+    return cart;
   }
 }

@@ -1,6 +1,6 @@
 export type CartRequestIdentity = {
   userId: string | null;
-  guestId: string;
+  guestId: string | null;
 };
 
 export type CartItemPayload = {

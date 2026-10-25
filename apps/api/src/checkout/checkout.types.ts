@@ -1,6 +1,6 @@
 export type CheckoutRequestIdentity = {
   userId: string | null;
-  guestId: string;
+  guestId: string | null;
 };
 
 export type CheckoutPayload = {

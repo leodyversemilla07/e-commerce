@@ -3,5 +3,5 @@ export type OrderStatus = 'PENDING' | 'CONFIRMED' | 'SHIPPED' | 'DELIVERED' | 'C
 
 export type OrdersRequestIdentity = {
   userId: string | null;
-  guestId: string;
+  guestId: string | null;
 };

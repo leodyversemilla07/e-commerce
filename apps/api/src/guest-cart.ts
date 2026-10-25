@@ -4,7 +4,8 @@ import type { Request, Response } from 'express';
 import { apiEnv } from './prisma';
 
 const GUEST_CART_COOKIE = 'guest_cart_id';
-const ONE_YEAR_IN_SECONDS = 60 * 60 * 24 * 365;
+const GUEST_CART_TTL_SECONDS = 60 * 60 * 24 * 30;
+const GUEST_CART_TTL_MS = GUEST_CART_TTL_SECONDS * 1000;
 
 function parseCookieHeader(cookieHeader: string | undefined) {
   if (!cookieHeader) return new Map<string, string>();
@@ -26,21 +27,29 @@ function parseCookieHeader(cookieHeader: string | undefined) {
   );
 }
 
-function sign(guestId: string): string {
-  return createHmac('sha256', apiEnv.BETTER_AUTH_SECRET).update(guestId).digest('base64url');
+function sign(guestId: string, expiresAt: number): string {
+  return createHmac('sha256', apiEnv.BETTER_AUTH_SECRET)
+    .update(`${guestId}.${expiresAt}`)
+    .digest('base64url');
 }
 
 function serialize(guestId: string): string {
-  return `${guestId}.${sign(guestId)}`;
+  const expiresAt = Math.floor(Date.now() / 1000) + GUEST_CART_TTL_SECONDS;
+  return `${guestId}.${expiresAt}.${sign(guestId, expiresAt)}`;
 }
 
 function verify(value: string): string | null {
-  const separator = value.lastIndexOf('.');
-  if (separator <= 0 || separator === value.length - 1) return null;
+  const [guestId, expiresAtRaw, providedSignature, extra] = value.split('.');
+  if (extra !== undefined || !guestId || !expiresAtRaw || !providedSignature) return null;
+  if (!/^\d+$/.test(expiresAtRaw)) return null;
 
-  const guestId = value.slice(0, separator);
-  const provided = Buffer.from(value.slice(separator + 1));
-  const expected = Buffer.from(sign(guestId));
+  const expiresAt = Number(expiresAtRaw);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) {
+    return null;
+  }
+
+  const provided = Buffer.from(providedSignature);
+  const expected = Buffer.from(sign(guestId, expiresAt));
 
   if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
     return null;
@@ -50,12 +59,26 @@ function verify(value: string): string | null {
 }
 
 /**
- * Reads the guest cart id only when its cookie signature is valid.
- * Unsigned or tampered cookies are treated as absent.
+ * Reads the guest cart id only when its cookie signature is valid and the
+ * server-side expiry has not passed. Unsigned, tampered, or expired cookies
+ * are treated as absent.
  */
 export function readGuestCartId(req: Request): string | null {
   const value = parseCookieHeader(req.headers.cookie).get(GUEST_CART_COOKIE);
   return value ? verify(value) : null;
+}
+
+/**
+ * Clears the browser's guest identity. Called after an authenticated cart
+ * operation so a later account on the same browser cannot reuse it.
+ */
+export function clearGuestCartCookie(res: Response): void {
+  res.clearCookie(GUEST_CART_COOKIE, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+  });
 }
 
 /**
@@ -71,7 +94,7 @@ export function getOrCreateGuestCartId(req: Request, res: Response): string {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
-    maxAge: ONE_YEAR_IN_SECONDS * 1000,
+    maxAge: GUEST_CART_TTL_MS,
     path: '/',
   });
 
