@@ -24,7 +24,7 @@
     "@workspace/env": "workspace:*",
     "@workspace/typescript-config": "workspace:*",
     "concurrently": "^9.2.1",
-    "turbo": "^2.8.17",
+    "turbo": "^2.11.10",
     "typescript": "5.9.3"
   },
   "packageManager": "pnpm@12.15.0",
@@ -34,8 +34,5 @@
   "workspaces": [
     "apps/*",
     "packages/*"
-  ],
-  "dependencies": {
-    "lucide-react": "^1.8.0"
-  }
+  ]
 }

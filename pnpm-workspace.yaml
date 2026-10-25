@@ -2,6 +2,24 @@ packages:
   - "apps/*"
   - "packages/*"
 
+autoInstallPeers: false
+
+overrides:
+  "@babel/core": "^7.29.7"
+  "@hono/node-server": "^1.19.17"
+  "baseline-browser-mapping": "^2.11.32"
+  "body-parser": "^2.4.0"
+  "browserslist": "^4.29.4"
+  "deepmerge-ts": "^8.0.2"
+  "fast-uri": "^3.1.9"
+  "hono": "^4.13.14"
+  "multer": "^2.5.0"
+  "mysql2": "^3.24.6"
+  "proxy-addr": "^2.0.8"
+  "qs": "^6.16.1"
+  "source-map-js": "^1.2.2"
+  "valibot": "^1.5.0"
+
 allowBuilds:
   "@biomejs/biome": true
   "@nestjs/core": true
@@ -12,3 +30,6 @@ allowBuilds:
   prisma: true
   sharp: true
   unrs-resolver: true
+
+minimumReleaseAgeExclude:
+  - hono@4.13.14
